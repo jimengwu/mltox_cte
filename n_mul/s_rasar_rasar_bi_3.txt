@@ -1,0 +1,2 @@
+,n_estimators,min_samples_split,min_samples_leaf,max_depth,class_weight,train_avg_accuracy,train_avg_recall,train_avg_specificity,train_avg_f1,train_avg_precision,train_std_accuracy,train_std_recall,train_std_specificity,train_std_f1,train_std_precision,test_accuracy,test_recall,test_specificity,test_f1,test_precision,alpha_h,alpha_p,num_neighbor
+0,260,2,8,30,,0.9379360465116279,0.0,1.0,0.0,0.0,0.02416625676470534,0.0,0.0,0.0,0.0,0.918918918918919,0.0,1.0,0.0,0.0,0.01,0.01,3
