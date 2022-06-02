@@ -234,10 +234,10 @@ if __name__ == "__main__":
                         ap,
                         ",",
                         nei,
-                        ",",
                         "*" * 50,
                         count / num_runs,
                         remain_time,
+                        "remained.",
                         ctime(),
                         end="\r",
                     )

@@ -331,6 +331,7 @@ for repeat in range(args.repeat):
                                 "*" * 50,
                                 count / num_runs,
                                 remain_time,
+                                "remained.",
                                 ctime(),
                                 end="\r",
                             )
