@@ -88,7 +88,7 @@ if __name__ == "__main__":
     print("finish loaded.", ctime())
 
     df_fishchem = db_mortality[["fish", "test_cas", conc_column]]
-    # 10
+
     record = []
     for repeat in range(args.repeat):
         filename = (

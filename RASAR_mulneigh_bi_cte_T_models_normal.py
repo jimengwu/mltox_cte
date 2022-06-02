@@ -14,7 +14,7 @@ import sys
 from pebble import ProcessPool
 from concurrent.futures import TimeoutError
 import traceback
-
+import datetime
 
 import logging
 
@@ -291,7 +291,6 @@ for repeat in range(args.repeat):
     folds = list(group_kfold.split(df_fishchem_tv, groups=df_fishchem_tv["test_cas"]))
 
     count = 1
-    import datetime
 
     starttime = datetime.datetime.now()
     num_runs = (

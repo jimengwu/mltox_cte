@@ -13,6 +13,7 @@ import multiprocessing as mp
 from sklearn.model_selection import train_test_split, ParameterSampler
 import pickle
 import os
+import datetime
 
 # db_invitro_matrix not defined in this code
 db_invitro_matrix = None
@@ -208,6 +209,9 @@ if __name__ == "__main__":
 
     count = 1
     print(len(params_comb))
+
+    starttime = datetime.datetime.now()
+    num_runs = len(sequence_ap) ** 2 * len(params_comb) * len(args.neighbors)
     for nei in args.neighbors:
         best_accs = 0
         grid_search = pd.DataFrame()
@@ -219,17 +223,21 @@ if __name__ == "__main__":
                         setattr(model, k, v)
                     results = []
 
+                    remain_time = (
+                        (datetime.datetime.now() - starttime)
+                        / count
+                        * (num_runs - count)
+                    )
                     print(
                         ah,
+                        ",",
                         ap,
+                        ",",
                         nei,
+                        ",",
                         "*" * 50,
-                        count
-                        / (
-                            len(sequence_ap) ** 2
-                            * len(params_comb)
-                            * len(args.neighbors)
-                        ),
+                        count / num_runs,
+                        remain_time,
                         ctime(),
                         end="\r",
                     )
