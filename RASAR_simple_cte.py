@@ -6,11 +6,12 @@ import os
 
 
 def getArguments():
-    parser = argparse.ArgumentParser(description="Running KNN_model for datasets.")
+    parser = argparse.ArgumentParser(description="Running simple RASAR model with strafitied splitting datasets.")
     parser.add_argument("-i", "--input", dest="inputFile", required=True)
+    parser.add_argument("-iv", "--input_vitro", dest="inputFile_vitro", default="no")
     parser.add_argument("-ah", "--alpha_h", dest="alpha_h", required=True, nargs="?")
     parser.add_argument("-ap", "--alpha_p", dest="alpha_p", required=True, nargs="?")
-    parser.add_argument("-dbi", "--db_invitro", dest="db_invitro", default="noinvitro")
+    parser.add_argument("-dbi", "--db_invitro", dest="db_invitro", default="no")
     parser.add_argument("-e", "--encoding", dest="encoding", default="binary")
     parser.add_argument(
         "-if",
@@ -22,8 +23,9 @@ def getArguments():
     parser.add_argument(
         "-il", "--invitro_label", dest="invitro_label", default="number"
     )
+    parser.add_argument("-iv", "--invitro_type", dest="invitro_type", default="False")
     parser.add_argument(
-        "-m", "--model", help="model: logistic regression, random forest", default="rf",
+        "-m", "--model_type", help="model: logistic regression, random forest,decision tree", default="rf",
     )
     parser.add_argument(
         "-n", "--n_neighbors", dest="n_neighbors", nargs="?", default=1, type=int
@@ -50,24 +52,31 @@ elif args.encoding == "multiclass":
     encoding_value = [0.1, 1, 10, 100]
 
 
-if args.invitroFile == "True":
-    categorical = ["class", "tax_order", "family", "genus", "species"]
-
-db_invitro_matrix = None
+categorical, conc_column = get_col_ls(args.invitro_type)
 
 rand = random.randrange(1, 100)
 
-conc_column = "conc1_mean"
 
 # -----------loading data & splitting into train and test dataset--------
-db_mortality = load_data(
-    args.inputFile,
-    encoding=encoding,
-    categorical_columns=categorical,
-    conc_column=conc_column,
-    encoding_value=encoding_value,
-    seed=rand,
-)
+print("loading dataset...", ctime())
+if args.db_invitro == "no" or args.db_invitro == "overlap":
+    db_mortality = load_data(
+        args.inputFile,
+        encoding=encoding,
+        categorical_columns=categorical,
+        conc_column=conc_column,
+        encoding_value=encoding_value,
+        seed=rand,
+    )
+    db_invitro = args.db_invitro
+else:
+    db_mortality, db_invitro = load_invivo_invitro(
+        args.inputFile,
+        args.inputFile_vitro,
+        encoding=encoding,
+        encoding_value=encoding_value,
+        seed=42,
+    )
 print("finish loaded.", ctime())
 
 # -----------------startified split the dataset for training model--------
@@ -78,46 +87,70 @@ df_fishchem = db_mortality[["fish", "test_cas"]]
 traintest_idx, valid_idx = get_grouped_train_test_split(
     df_fishchem, test_size, col_groups
 )
-df_fishchem_tv = df_fishchem.iloc[traintest_idx, :].reset_index(drop=True)
 
-X_traintest = (
-    db_mortality.drop(columns="conc1_mean")
-    .iloc[traintest_idx, :]
-    .reset_index(drop=True)
+df_fishchem_tv = df_fishchem.iloc[traintest_idx, :]
+X_traintest, X_valid, Y_traintest, Y_valid = get_train_test_data(
+    db_mortality, traintest_idx, valid_idx, conc_column
 )
-X_valid = (
-    db_mortality.drop(columns="conc1_mean").iloc[valid_idx, :].reset_index(drop=True)
-)
-Y_traintest = db_mortality.iloc[traintest_idx, :].conc1_mean
-Y_valid = db_mortality.iloc[valid_idx, :].conc1_mean
+
+if args.db_invitro != "no" and args.db_invitro != "overlap":
+    # Encoding for invitro variable: binary and multiclass
+    if args.encoding == "binary":
+        db_invitro["invitro_label"] = np.where(
+            db_invitro["invitro_conc"].values > 1, 0, 1
+        )
+        db_invitro["invitro_label_half"] = np.where(
+            db_invitro["invitro_conc"].median() > 1, 0, 1
+        )
+    elif args.encoding == "multiclass":
+        db_invitro["invitro_label"] = multiclass_encoding(
+            db_invitro["invitro_conc"], [0.006, 0.3, 63, 398]
+        )
 
 
 # -----------------creating the distance matrix--------
 
 print("calcultaing distance matrix..", ctime())
 matrices = cal_matrixs(X_traintest, X_traintest, categorical, non_categorical)
+
+X = db_mortality.drop(columns=conc_column)
+matrices_full = cal_matrixs(X, X, categorical, non_categorical)
+
+if args.db_invitro != "no" and args.db_invitro != "overlap":
+    matrices_invitro = cal_matrixs(
+        X_traintest, db_invitro, categorical_both, non_categorical
+    )
+else:
+    matrices_invitro = None
 print("distance matrix calculation finished", ctime())
 
-# -----------------train model--------
-hyper_params_tune = {
-    "max_depth": [i for i in range(10, 30, 6)],
-    "n_estimators": [int(x) for x in np.linspace(start=200, stop=1000, num=11)],
-    "min_samples_split": [2, 5, 10],
-    "min_samples_leaf": [1, 2, 4, 8, 16, 32],
-}
+# ------------------------hyperparameters range---------
+if args.alpha_h == "logspace":
+    sequence_ah = np.logspace(-2, 0, 3)
+else:
+    sequence_ah = [float(args.alpha_h)]
+
+if args.alpha_p == "logspace":
+    sequence_ap = np.logspace(-2, 0, 3)
+else:
+    sequence_ap = [float(args.alpha_p)]
+
+
+# hyper_params_tune = {
+#     "max_depth": [i for i in range(10, 30, 6)],
+#     "n_estimators": [int(x) for x in np.linspace(start=200, stop=1000, num=11)],
+#     "min_samples_split": [2, 5, 10],
+#     "min_samples_leaf": [1, 2, 4, 8, 16, 32],
+# }
+hyper_params_tune,model = set_hyperparameters(args.model_type)
 
 params_comb = list(
     ParameterSampler(hyper_params_tune, n_iter=args.niter, random_state=rand)
 )
 
+# -------------------training using the default model setting and found the best alphas combination--------------------
+
 best_accs = 0
-best_param = dict()
-if args.alpha_h == "logspace":
-    sequence_ap = np.logspace(-2, 0, 2)
-    sequence_ah = sequence_ap
-else:
-    sequence_ap = [float(args.alpha_p)]
-    sequence_ah = [float(args.alpha_h)]
 
 count = 1
 for ah in sequence_ah:
@@ -125,15 +158,11 @@ for ah in sequence_ah:
         for i in range(0, len(params_comb)):
             print(
                 "*" * 50,
-                count / (len(sequence_ap) ** 2 * len(params_comb)),
+                count / (len(sequence_ap) * len(sequence_ah) * len(params_comb)),
                 ctime(),
                 end="\r",
             )
             count = count + 1
-            if args.model == "rf":
-                model = RandomForestClassifier(random_state=10)
-            elif args.model == "lr":
-                model = LogisticRegression(random_state=10)
 
             for k, v in params_comb[i].items():
                 setattr(model, k, v)
@@ -141,34 +170,35 @@ for ah in sequence_ah:
             results = RASAR_simple(
                 df_fishchem_tv,
                 col_groups,
-                matrices["euc"],
-                matrices["hamming"],
-                matrices["pubchem"],
+                matrices,
                 ah,
                 ap,
                 X_traintest,
                 Y_traintest.values,
-                db_invitro_matrices="noinvitro",
+                db_invitro_matrices=matrices_invitro,
                 n_neighbors=args.n_neighbors,
                 invitro=args.w_invitro,
                 invitro_form=args.invitro_label,
-                db_invitro=args.db_invitro,
+                db_invitro=db_invitro,
                 encoding=encoding,
                 model=model,
             )
 
             if results["accuracy"].mean() > best_accs:
-
                 best_accs = results["accuracy"].mean()
-
-                results.loc[0, "ah"] = ah
-                results.loc[0, "ap"] = ap
-                for k, v in best_param.items():
-                    results.loc[0, k] = v
 
                 best_results = results
 
+                best_ah = ah
+
+                best_ap = ap
+
                 best_param = params_comb[i]
+
+                print("success found better alphas and hyperparameters", best_accs)
+df_mean = pd.DataFrame(best_results.mean(axis=0)).transpose()
+df_std = pd.DataFrame(best_results.sem(axis=0)).transpose()
+df_std["neighbors"] = args.n_neighbors
 
 
 # -------------------tested on test dataset--------------------
@@ -176,54 +206,64 @@ for k, v in best_param.items():
     setattr(model, k, v)
 
 
-minmax = MinMaxScaler().fit(X_traintest[non_categorical])
-X_traintest[non_categorical] = minmax.transform(X_traintest.loc[:, non_categorical])
-X_valid[non_categorical] = minmax.transform(X_valid.loc[:, non_categorical])
-
-matrix_valid = dist_matrix(
-    X_valid,
-    X_traintest,
-    non_categorical,
-    categorical,
-    best_results.iloc[0]["ah"],
-    best_results.iloc[0]["ap"],
-)
-matrix_traintest = dist_matrix(
-    X_traintest,
-    X_traintest,
-    non_categorical,
-    categorical,
-    best_results.iloc[0]["ah"],
-    best_results.iloc[0]["ap"],
-)
-
-traintest_rf, valid_rf = cal_s_rasar(
-    matrix_traintest, matrix_valid, Y_traintest.values, args.n_neighbors, encoding
-)
-invitro_form = args.invitro_label
-db_invitro = args.db_invitro
-invitro = args.w_invitro
-
-
-if invitro == "own":
+if args.w_invitro == "own":
     traintest_rf = pd.DataFrame()
     valid_rf = pd.DataFrame()
+else:
+    (matrix_traintest, matrix_valid) = get_traintest_matrices(
+            matrices_full, [traintest_idx, valid_idx], best_ah, best_ap
+            )
+    
+    train_rf, test_rf = cal_s_rasar(
+        matrix_traintest,
+        matrix_valid,
+        Y_traintest,
+        args.n_neighbors,
+        encoding,
+    )
+if args.w_invitro != "False":
+    if str(db_invitro) == "overlap":
+        traintest_rf = get_vitroinfo(traintest_rf, X, traintest_idx, args.invitro_label)
+        valid_rf = get_vitroinfo(valid_rf, X, valid_idx, args.invitro_label)
+    else:
 
-if invitro != "False" and str(db_invitro) == "overlap":
-    traintest_rf = get_vitroinfo(traintest_rf, X_traintest, traintest_idx, invitro_form)
-    valid_rf = get_vitroinfo(valid_rf, X_valid, valid_idx, invitro_form)
+        matrices_invitro_norm = normalized_invitro_matrix(X_traintest, matrices_invitro, best_ah, best_ap)
 
+        train_rf = find_nearest_vitro(
+            traintest_rf,
+            db_invitro,
+            matrices_invitro_norm,
+            traintest_idx,
+            args.invitro_label,
+        )
+        test_rf = find_nearest_vitro(
+            valid_rf, db_invitro, matrices_invitro_norm, valid_idx, args.invitro_label,
+        )
 
-# --------saving the information into a file
-df_output = fit_and_predict(
+df_test_score = fit_and_predict(
     model, traintest_rf, Y_traintest, valid_rf, Y_valid, encoding
 )
-df_output.loc[0, ["ah", "ap"]] = best_results.iloc[0][["ah", "ap"]]
-for k, v in best_param.items():
-    df_output.loc[0, k] = v
-df_output.loc[0, "encoding"] = args.encoding
 
+df_test_score.loc[0, ["ah", "ap"]] = best_ah, best_ap
+
+for k, v in best_param.items():
+    df_test_score.loc[0, k] = v
+
+df_test_score.loc[0, "encoding"] = args.encoding
+
+
+df_output = pd.concat(
+    [df_mean, df_std, df_test_score],
+    keys=["train_mean", "train_std", "test"],
+    names=["series_name"],
+)
+
+# --------saving the information into a file
+print(df_output)
 df2file(df_output, args.outputFile + ".txt")
+
+
+# python RASAR_simple_cte.py -i data/invivo/lc50_test.csv -ah 0.0749 -ap 0.5623  -o rasar/s_rf_bi.txt
 
 
 # model.fit(traintest_rf, Y_traintest)

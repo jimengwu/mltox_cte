@@ -3,8 +3,6 @@ from helper_cte_model import *
 import numpy as np
 from time import ctime
 import argparse
-import sys
-import os
 
 
 def getArguments():
@@ -111,7 +109,7 @@ Y_valid = db_mortality.iloc[valid_idx, :].conc1_mean
 # ])
 # sequence_alpha = np.logspace(-5, 0, 30)
 sequence_alpha = np.logspace(-2, 1, 30)
-sequence_alpha = np.logspace(-2, 1, 3)  # just for testing
+# sequence_alpha = np.logspace(-2, 1, 3)  # just for testing
 
 best_results = select_alpha(
     df_fishchem_tv,

@@ -1,37 +1,39 @@
-from helper_model_cte import *
-from sklearn.model_selection import train_test_split, ParameterSampler
+from helper_cte_model import *
+from sklearn.model_selection import ParameterSampler
 import h2o
-from tqdm import tqdm
+
 import argparse
-import sys
-import os
+
+class_threshold = None
 
 
 def getArguments():
     parser = argparse.ArgumentParser(description="Running KNN_model for datasets.")
-    parser.add_argument("-i1", "--input", dest="inputFile", required=True)
+    parser.add_argument("-i", "--input", dest="inputFile", required=True)
     parser.add_argument("-idf", "--input_df", dest="inputFile_df", required=True)
-    parser.add_argument(
-        "-il", "--invitro_label", dest="invitro_label", default="number"
-    )
-    parser.add_argument("-dbi", "--db_invitro", dest="db_invitro", default="noinvitro")
-    parser.add_argument("-wi", "--w_invitro", dest="w_invitro", default="False")
+    parser.add_argument("-iv", "--input_vitro", dest="inputFile_vitro", default="no")
+    parser.add_argument("-ah", "--alpha_h", dest="alpha_h", required=True)
+    parser.add_argument("-ap", "--alpha_p", dest="alpha_p", required=True)
+    # parser.add_argument("-dbi", "--db_invitro", dest="db_invitro", default="no")
     parser.add_argument("-e", "--encoding", dest="encoding", default="binary")
-    parser.add_argument("-ah", "--alpha_h", dest="alpha_h", required=True, nargs="?")
-    parser.add_argument("-ap", "--alpha_p", dest="alpha_p", required=True, nargs="?")
-    parser.add_argument(
-        "-n", "--n_neighbors", dest="n_neighbors", nargs="?", default=1, type=int
-    )
+    parser.add_argument("-effect", "--train_effect", dest="train_effect", required=True)
     parser.add_argument(
         "-endpoint", "--train_endpoint", dest="train_endpoint", required=True
     )
-    # parser.add_argument("-fixed", "--fixed_threshold", dest="fixed_threshold")
-    parser.add_argument("-effect", "--train_effect", dest="train_effect", default="MOR")
+    parser.add_argument(
+        "-il", "--invitro_label", dest="invitro_label", default="number"
+    )
+    parser.add_argument(
+        "-n", "--n_neighbors", dest="n_neighbors", nargs="?", default=1, type=int
+    )
+    parser.add_argument("-ni", "--niter", dest="niter", default=50, type=int)
+    parser.add_argument("-wi", "--w_invitro", dest="w_invitro", default="False")
     parser.add_argument("-o", "--output", dest="outputFile", default="binary.txt")
     return parser.parse_args()
 
 
 args = getArguments()
+# ---------------info for running the model----------------
 if args.encoding == "binary":
     encoding = "binary"
     encoding_value = 1
@@ -39,69 +41,85 @@ elif args.encoding == "multiclass":
     encoding = "multiclass"
     encoding_value = [0.1, 1, 10, 100]
 
-# print(args.outputFile)
-rand = random.randrange(1, 100)
+# -----------loading data & splitting into train and test dataset--------
+print("loading dataset...", ctime())
+if args.inputFile_vitro == "no" or args.inputFile_vitro == "overlap":
+    db_mortality, db_datafusion = load_datafusion_datasets(
+        args.inputFile,
+        args.inputFile_df,
+        categorical_columns=categorical,
+        encoding=encoding,
+        encoding_value=encoding_value,
+    )
+    db_invitro = None
+else:
+    db_mortality, db_datafusion, db_invitro = load_datafusion_datasets_invitro(
+        args.inputFile,
+        args.inputFile_df,
+        args.inputFile_vitro,
+        categorical_columns=categorical,
+        encoding=encoding,
+        encoding_value=encoding_value,
+    )
+
+print("Data loaded.", ctime())
+# -----------------startified split the dataset for training model--------
 
 test_size = 0.2
 col_groups = "test_cas"
 
-db_mortality, db_datafusion = load_datafusion_datasets(
-    args.inputFile,
-    args.inputFile_df,
-    categorical_columns=categorical,
-    encoding=encoding,
-    encoding_value=encoding_value,
-)
-# db_mortality = db_mortality[:300]
-# db_datafusion = db_datafusion[:300]
-
-
 df_fishchem = db_mortality[["fish", "test_cas"]]
-trainvalid_idx, test_idx = get_grouped_train_test_split(
+traintest_idx, valid_idx = get_grouped_train_test_split(
     df_fishchem, test_size, col_groups
 )
-df_fishchem_tv = df_fishchem.iloc[trainvalid_idx, :].reset_index(drop=True)
+df_fishchem_tv = df_fishchem.iloc[traintest_idx, :]
+
 
 X = db_mortality.drop(columns="conc1_mean").copy()
-X_trainvalid = db_mortality.drop(columns="conc1_mean").iloc[trainvalid_idx, :]
-X_valid = db_mortality.drop(columns="conc1_mean").iloc[test_idx, :]
-Y_trainvalid = db_mortality.iloc[trainvalid_idx, :].conc1_mean.values
-Y_valid = db_mortality.iloc[test_idx, :].conc1_mean.values
+Y = db_mortality.conc1_mean.values
+
+X_traintest = X.iloc[traintest_idx, :]
+X_valid = X.iloc[valid_idx, :]
+Y_traintest = Y[traintest_idx]
+Y_valid = Y[valid_idx]
 
 
-print("Data loaded.", ctime())
-# matrix_h, matrix_p = cal_matrixs(
-#     X_trainvalid, X_trainvalid, categorical, non_categorical
-# )
-print("calcultaing distance matrix..", ctime())
-matrix_euc, matrix_h, matrix_p = cal_matrixs(
-    X_trainvalid, X_trainvalid, categorical, non_categorical
-)
-matrix_euc_df, matrix_h_df, matrix_p_df = cal_matrixs(
-    X_trainvalid,
+# -----------------creating the distance matrix--------
+
+matrices = cal_matrixs(X_traintest, X_traintest, categorical, non_categorical)
+matrices_df = cal_matrixs(
+    X_traintest,
     db_datafusion.drop(columns="conc1_mean").copy(),
     categorical,
     non_categorical,
 )
+if args.inputFile_vitro != "no" and args.inputFile_vitro != "overlap":
+    matrices_invitro = cal_matrixs(
+        X_traintest, db_invitro, categorical_both, non_categorical
+    )
+else:
+    matrices_invitro = None
 
 print("distance matrix successfully calculated!", ctime())
 
-del db_mortality
+
+# ------------------------hyperparameters range---------
+
 if encoding == "binary":
-    model = RandomForestClassifier()
+    model = RandomForestClassifier(random_state=10)
     # hyper_params_tune = {
-    #     "max_depth": [i for i in range(10, 30, 6)],
-    #     "n_estimators": [int(x) for x in np.linspace(start=200, stop=1000, num=11)],
+    #     "max_depth": [i for i in range(10, 20, 2)],
+    #     "n_estimators": [int(x) for x in np.linspace(start=100, stop=1000, num=2)],
     #     "min_samples_split": [2, 5, 10],
-    #     "min_samples_leaf": [1, 2, 4, 8, 16, 32],
+    #     "min_samples_leaf": [1, 2, 4],
     # }
     hyper_params_tune = {
         "n_estimators": [int(x) for x in np.linspace(start=200, stop=500, num=6)],
-        "max_depth": [i for i in range(10, 100, 10)],
+        "max_depth": [i for i in range(10, 36, 5)],
         "min_samples_split": [2, 4, 6],
         "min_samples_leaf": [1, 2, 4, 8, 16],
-        "class_weight": [{0: i, 1: 1} for i in range(0, 20)],
     }
+
 elif encoding == "multiclass":
     h2o.init()
     h2o.no_progress()
@@ -112,130 +130,116 @@ elif encoding == "multiclass":
         "min_rows": [1, 10, 100, 1000],
         "sample_rate": [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1],
     }
-
-
-params_comb = list(ParameterSampler(hyper_params_tune, n_iter=10, random_state=rand))
+rand = 2
+params_comb = list(ParameterSampler(hyper_params_tune, n_iter=args.niter))
 
 
 if args.alpha_h == "logspace":
-    sequence_ap = np.logspace(-2, 0, 20)
-    sequence_ah = sequence_ap
+    sequence_ah = np.logspace(-2, 0, 30)
 else:
-    sequence_ap = [float(args.alpha_p)]
     sequence_ah = [float(args.alpha_h)]
 
+if args.alpha_p == "logspace":
+    sequence_ap = np.logspace(-2, 0, 30)
+else:
+    sequence_ap = [float(args.alpha_p)]
+
+# -------------------training using the default model setting and found the best alphas combination--------------------
+
 best_accs = 0
-best_p = dict()
+
 count = 1
 for ah in sequence_ah:
     for ap in sequence_ap:
         for i in range(0, len(params_comb)):
+            for k, v in params_comb[i].items():
+                setattr(model, k, v)
             print(
+                ah,
+                ap,
                 "*" * 50,
-                count / (len(sequence_ap) ** 2 * len(params_comb)),
+                count / (len(sequence_ap) * len(sequence_ap) * len(params_comb)),
                 ctime(),
                 end="\r",
             )
-            try:
-                for k, v in params_comb[i].items():
-                    setattr(model, k, v)
-
-                results = cv_datafusion_rasar_new(
-                    matrix_euc,
-                    matrix_h,
-                    matrix_p,
-                    matrix_euc_df,
-                    matrix_h_df,
-                    matrix_p_df,
-                    db_invitro_matrix="no",
-                    ah=ah,
-                    ap=ap,
-                    X=X_trainvalid,
-                    Y=Y_trainvalid,
-                    db_datafusion=db_datafusion,
-                    db_invitro=args.db_invitro,
-                    train_endpoint=args.train_endpoint,
-                    train_effect=args.train_effect,
-                    df_fishchem_tv=df_fishchem_tv,
-                    col_groups=col_groups,
-                    model=model,
-                    n_neighbors=args.n_neighbors,
-                    invitro=args.w_invitro,
-                    invitro_form=args.invitro_label,
-                    encoding=encoding,
-                )
-
-                if np.mean(results.accuracy) > best_accs:
-                    best_p = params_comb[i]
-                    best_accs = np.mean(results.accuracy)
-                    best_result = results
-                    best_ah = ah
-                    best_ap = ap
-                    print("success.", best_accs)
-
-            except:
-                continue
+            results = cv_datafusion_rasar(
+                matrices,
+                matrices_df,
+                matrices_invitro=matrices_invitro,
+                ah=ah,
+                ap=ap,
+                X=X_traintest,
+                Y=Y_traintest,
+                db_datafusion=db_datafusion,
+                db_invitro=db_invitro,
+                train_endpoint=args.train_endpoint,
+                train_effect=args.train_effect,
+                df_fishchem_tv=df_fishchem_tv,
+                col_groups=col_groups,
+                model=model,
+                n_neighbors=args.n_neighbors,
+                invitro=args.w_invitro,
+                invitro_form=args.invitro_label,
+                encoding=encoding,
+            )
+            # print(results["avg_accs"])
+            if np.mean(results.accuracy) > best_accs:
+                best_param = params_comb[i]
+                best_accs = np.mean(results.accuracy)
+                best_result = results
+                best_ah = ah
+                best_ap = ap
+                print("success.", best_accs)
             count = count + 1
+
 
 df_mean = pd.DataFrame(best_result.mean(axis=0)).transpose()
 df_std = pd.DataFrame(best_result.sem(axis=0)).transpose()
 
+
 # -------------------tested on test dataset--------------------
 print("start testing...", ctime())
-for k, v in best_p.items():
+for k, v in best_param.items():
     setattr(model, k, v)
 
-train_index = X_trainvalid.index
-test_index = X_valid.index
+X = db_mortality.drop(columns="conc1_mean")
 
-minmax = MinMaxScaler().fit(X_trainvalid[non_categorical])
-X_trainvalid[non_categorical] = minmax.transform(X_trainvalid.loc[:, non_categorical])
+minmax = MinMaxScaler().fit(X_traintest[non_categorical])
+X_traintest[non_categorical] = minmax.transform(X_traintest.loc[:, non_categorical])
 X_valid[non_categorical] = minmax.transform(X_valid.loc[:, non_categorical])
 X[non_categorical] = minmax.transform(X.loc[:, non_categorical])
 db_datafusion[non_categorical] = minmax.transform(db_datafusion.loc[:, non_categorical])
 
-
-matrix_test = dist_matrix(
-    X_valid,
-    X_trainvalid,
-    non_categorical,
-    categorical,
-    best_ah,
-    best_ap,
+matrix_valid = dist_matrix(
+    X_valid, X_traintest, non_categorical, categorical, best_ah, best_ap
 )
-matrix_train = dist_matrix(
-    X_trainvalid,
-    X_trainvalid,
-    non_categorical,
-    categorical,
-    best_ah,
-    best_ap,
+matrix_traintest = dist_matrix(
+    X_traintest, X_traintest, non_categorical, categorical, best_ah, best_ap
 )
-
 db_datafusion_matrix = dist_matrix(
-    X,
-    db_datafusion.drop(columns="conc1_mean").copy(),
-    non_categorical,
-    categorical,
-    best_ah,
-    best_ap,
+    X, db_datafusion, non_categorical, categorical, best_ah, best_ap
 )
 
+if args.inputFile_vitro != "no":
 
-del (matrix_h, matrix_p, matrix_h_df, matrix_p_df)
+    db_invitro[non_categorical] = minmax.transform(db_invitro.loc[:, non_categorical])
 
-simple_rasar_train, simple_rasar_test = cal_s_rasar(
-    matrix_train,
-    matrix_test,
-    Y_trainvalid,
-    args.n_neighbors,
-    encoding,
+    db_invitro_matrix_train = dist_matrix(
+        X_traintest, db_invitro, non_categorical, categorical_both, best_ah, best_ap
+    )
+    db_invitro_matrix_test = dist_matrix(
+        X_valid, db_invitro, non_categorical, categorical_both, best_ah, best_ap
+    )
+
+
+s_rasar_traintest, s_rasar_valid = cal_s_rasar(
+    matrix_traintest, matrix_valid, Y_traintest, args.n_neighbors, args.encoding
 )
 
-datafusion_rasar_train, datafusion_rasar_test = cal_df_rasar(
-    train_index,
-    test_index,
-    X_trainvalid,
+df_rasar_traintest, df_rasar_valid = cal_df_rasar(
+    traintest_idx,
+    valid_idx,
+    X_traintest,
     X_valid,
     db_datafusion,
     db_datafusion_matrix,
@@ -244,39 +248,48 @@ datafusion_rasar_train, datafusion_rasar_test = cal_df_rasar(
     encoding,
 )
 
-train_rf = pd.concat([simple_rasar_train, datafusion_rasar_train], axis=1)
-test_rf = pd.concat([simple_rasar_test, datafusion_rasar_test], axis=1)
+traintest_rf = pd.concat([s_rasar_traintest, df_rasar_traintest], axis=1)
+valid_rf = pd.concat([s_rasar_valid, df_rasar_valid], axis=1)
 
 if args.w_invitro == "own":
-    train_rf = pd.DataFrame()
-    test_rf = pd.DataFrame()
+    traintest_rf = pd.DataFrame()
+    valid_rf = pd.DataFrame()
 
 if args.w_invitro != "False":
-    if str(args.db_invitro) == "overlap":
-        train_rf = get_vitroinfo(
-            train_rf, X_trainvalid, train_index, args.invitro_label
+    if str(args.inputFile_vitro) == "overlap":
+        traintest_rf = get_vitroinfo(
+            traintest_rf, X_traintest, traintest_idx, args.invitro_label
         )
-        test_rf = get_vitroinfo(test_rf, X_valid, test_index, args.invitro_label)
+        valid_rf = get_vitroinfo(valid_rf, X_valid, valid_idx, args.invitro_label)
+    else:
+        db_invitro_matrix = dist_matrix(
+            X, db_invitro, non_categorical, categorical_both, best_ah, best_ap
+        )
+        traintest_rf = find_nearest_vitro(
+            traintest_rf,
+            db_invitro,
+            db_invitro_matrix,
+            traintest_idx,
+            args.invitro_label,
+        )
+        valid_rf = find_nearest_vitro(
+            valid_rf, db_invitro, db_invitro_matrix, valid_idx, args.invitro_label,
+        )
 
 if encoding == "binary":
     df_test_score = fit_and_predict(
-        model,
-        train_rf,
-        Y_trainvalid,
-        test_rf,
-        Y_valid,
-        encoding,
+        model, traintest_rf, Y_traintest, valid_rf, Y_valid, encoding,
     )
 
 elif encoding == "multiclass":
 
-    train_rf.loc[:, "target"] = Y_trainvalid
-    test_rf.loc[:, "target"] = Y_valid
+    traintest_rf.loc[:, "target"] = Y_traintest
+    valid_rf.loc[:, "target"] = Y_valid
 
-    train_rf_h2o = h2o.H2OFrame(train_rf)
-    test_rf_h2o = h2o.H2OFrame(test_rf)
+    train_rf_h2o = h2o.H2OFrame(traintest_rf)
+    test_rf_h2o = h2o.H2OFrame(valid_rf)
 
-    for col in train_rf.columns:
+    for col in traintest_rf.columns:
         if "label" in col:
             train_rf_h2o[col] = train_rf_h2o[col].asfactor()
             test_rf_h2o[col] = test_rf_h2o[col].asfactor()
@@ -298,114 +311,104 @@ elif encoding == "multiclass":
     h2o.shutdown()
 
 
+for k, v in best_param.items():
+    df_test_score.loc[0, k] = str(v)
+
+df_test_score.loc[0, ["ah", "ap"]] = best_result.iloc[0][["ah", "ap"]]
+df_test_score.loc[0, "encoding"] = args.encoding
+
 df_output = pd.concat(
     [df_mean, df_std, df_test_score],
     keys=["train_mean", "train_std", "test"],
     names=["series_name"],
 )
-df_output["model"] = str(best_p)
+
 
 # ----------------save the information into a file-------
 df2file(df_output, args.outputFile)
 
 
-# ------------------------------------------------------invivo to invivo(gvvdf)----------------------------------------------------------
-# binary, datafusion, R=4
-# python RASAR_df_cte.py -i1 /local/wujimeng/code_jimeng/data/invivo/lc50_processed_jim.csv     -idf  /local/wujimeng/code_jimeng/data/invivo/datafusion_db_processed.csv -endpoint ['LC50','EC50'] -effect 'MOR'  -ah 0.23357214690901212 -ap 0.11288378916846889 -n 4 -o vitro_e/vivo+vitro/general/vivo_df_rasar_bi_4.csv
-# python RASAR_df_cte.py -i1 data/invivo/lc50_processed_jim.csv     -idf  /local/wujimeng/code_jimeng/data/invivo/datafusion_db_processed.csv -endpoint ['LC50','EC50'] -effect 'MOR'  -ah 0.041753189365604   -ap 4.893900918477494        -o rasar/df_rasar.txt
+# ----------------------------------------------------------------------------------general: invitro + (invivo) -> invivo(gtvvdf)--------------------------------------------
+# binary, R=4
+# python RASAR_df_addinginvitro_cte.py -i /local/wujimeng/code_jimeng/data/invivo/lc50_processed_jim.csv  -i2 /local/wujimeng/code_jimeng/data/invivo/datafusion_db_processed.csv -dbi /local/wujimeng/code_jimeng/data/invitro/invitro_processed.csv  -endpoint ['LC50','EC50'] -effect 'MOR' -wi "True" -il "number" -n 4 -ah 0.23357214690901212 -ap 0.1128837891684889  -o "vitro_e/vivo+vitro/bestR/general/general_df.txt"
+# python RASAR_df_addinginvitro_cte.py -i /local/wujimeng/code_jimeng/data/invivo/lc50_processed_jim.csv  -i2 /local/wujimeng/code_jimeng/data/invivo/datafusion_db_processed.csv -dbi /local/wujimeng/code_jimeng/data/invitro/invitro_processed.csv  -endpoint ['LC50','EC50'] -effect 'MOR' -wi "own"  -il "number" -n 4 -ah 0.23357214690901212 -ap 0.1128837891684889  -o "vitro_e/vivo+vitro/bestR/general/general_own_invitro_df.txt"
 
+# multiclass, R=5
+# python RASAR_df_addinginvitro.py -i data/invivo/lc50_processed_jim.csv  -i2 data/invivo/datafusion_db_processed.csv -dbi data/invitro/invitro_processed.csv -e "multiclass" -endpoint ['LC50','EC50'] -effect 'MOR' -wi "True" -il "number" -n 5 -ah 0.04281332398719394 -ap 0.7847599703514611  -o "vitro_e/vivo+vitro/bestR/new/multiclass/general/general_df_mul.txt"
+# python RASAR_df_addinginvitro.py -i data/invivo/lc50_processed_jim.csv  -i2 data/invivo/datafusion_db_processed.csv -dbi data/invitro/invitro_processed.csv -e "multiclass" -endpoint ['LC50','EC50'] -effect 'MOR' -wi "own"  -il "number" -n 5 -ah 0.04281332398719394 -ap 0.7847599703514611  -o "vitro_e/vivo+vitro/bestR/new/multiclass/general/general_own_invitro_df_mul.txt"
 
-# ------------------------------------------------------invivo to invivo(ovvdf)----------------------------------------------------------
-# python RASAR_df_cte.py -i1 /local/wujimeng/code_jimeng/data/invivo/invivo_repeated_w_invitro.csv -idf  /local/wujimeng/code_jimeng/data/invivo/datafusion_db_processed.csv -endpoint ['LC50','EC50'] -effect 'MOR'  -ah logspace -ap logspace -dbi "no"      -wi "False" -il "both" -o vitro_e/vivo/vivo_df_rasar_bi_repeated_4.csv
-
-# ------------------------------------------------------invitro + invivo to invivo(otvvdf)----------------------------------------------------------
-# python RASAR_df_cte.py -i1 /local/wujimeng/code_jimeng/data/invivo/invivo_repeated_w_invitro.csv -idf  /local/wujimeng/code_jimeng/data/invivo/datafusion_db_processed.csv -endpoint ['LC50','EC50'] -effect 'MOR'  -ah logspace -ap logspace -dbi "overlap" -wi "True"  -il "number" -o vitro_e/vivo+vitro/bestR/repeat_number_df.txt
-# python RASAR_df_cte.py -i1 /local/wujimeng/code_jimeng/data/invivo/invivo_repeated_w_invitro.csv -idf  /local/wujimeng/code_jimeng/data/invivo/datafusion_db_processed.csv -endpoint ['LC50','EC50'] -effect 'MOR'  -ah logspace -ap logspace -dbi "overlap" -wi "True"  -il "label"  -o vitro_e/vivo+vitro/bestR/repeat_label_df.txt
-# python RASAR_df_cte.py -i1 /local/wujimeng/code_jimeng/data/invivo/invivo_repeated_w_invitro.csv -idf  /local/wujimeng/code_jimeng/data/invivo/datafusion_db_processed.csv -endpoint ['LC50','EC50'] -effect 'MOR'  -ah logspace -ap logspace -dbi "overlap" -wi "True"  -il "both"   -o vitro_e/vivo+vitro/bestR/repeat_both_df.txt
-# python RASAR_df_cte.py -i1 /local/wujimeng/code_jimeng/data/invivo/invivo_repeated_w_invitro.csv -idf  /local/wujimeng/code_jimeng/data/invivo/datafusion_db_processed.csv -endpoint ['LC50','EC50'] -effect 'MOR'  -ah logspace -ap logspace -dbi "overlap" -wi "own"   -il "number" -o vitro_e/vivo+vitro/bestR/repeat_own_number_df.txt
-# python RASAR_df_cte.py -i1 /local/wujimeng/code_jimeng/data/invivo/invivo_repeated_w_invitro.csv -idf  /local/wujimeng/code_jimeng/data/invivo/datafusion_db_processed.csv -endpoint ['LC50','EC50'] -effect 'MOR'  -ah logspace -ap logspace -dbi "overlap" -wi "own"   -il "label"  -o vitro_e/vivo+vitro/bestR/repeat_own_label_df.txt
-# python RASAR_df_cte.py -i1 /local/wujimeng/code_jimeng/data/invivo/invivo_repeated_w_invitro.csv -idf  /local/wujimeng/code_jimeng/data/invivo/datafusion_db_processed.csv -endpoint ['LC50','EC50'] -effect 'MOR'  -ah logspace -ap logspace -dbi "overlap" -wi "own"   -il "both"   -o vitro_e/vivo+vitro/bestR/repeat_own_both_df.txt
-
-# -ah 0.01 -ap 0.15264179671752334
-
-
-# python RASAR_df.py -i1 data/LOEC/loec_processed.csv  -i2 data/LOEC/loec_processed_df_itself.csv -endpoint 'LOEC' -effect 'MOR' -fixed no -ah 0.615848211066026 -ap 16.23776739188721 -o results/mortality/loec_df_itself.txt
-# python RASAR_df.py -i1 data/NOEC/noec_processed.csv  -i2 data/NOEC/noec_processed_df_itself.csv -endpoint 'NOEC' -effect 'MOR' -fixed no -ah 0.06951927961775606  -ap 0.2069138081114788 -o results/mortality/noec_df_itself.txt
-# python RASAR_df.py -i1 data/LC50/lc50_processed.csv  -i2 data/LC50/lc50_processed_df_itself.csv  -endpoint ['LC50','EC50'] -effect 'MOR' -fixed no -ah 0.2069138081114788 -ap 0.615848211066026 -o results/mortality/lc50_df_itself.txt
-# python RASAR.py -i1 data/LC50/lc50_processed_rainbow.csv  -i2 data/LC50/lc50_processed_df_rainbow.csv -endpoint ['LC50','EC50'] -effect 'MOR' -fixed no -ah 5.455594781168514 -ap 143.8449888287663 -o results/rainbow/lc50_df_rainbow_binary.txt
-
-# python RASAR.py  -i1 data/LC50/lc50_processed.csv  -idf data/LC50/lc50_processed_df_acc.csv  -endpoint ['LC50','EC50'] -effect 'MOR' -ah 0.2069138081114788 -ap 0.615848211066026 -o results/effect/lc50_df_acc_nomor.txt
-# python RASAR.py  -i1 data/LC50/lc50_processed.csv  -idf data/LC50/lc50_processed_df_beh.csv  -endpoint ['LC50','EC50'] -effect 'MOR' -ah 0.2069138081114788 -ap 0.615848211066026 -o results/effect/lc50_df_beh_nomor.txt
-# python RASAR.py  -i1 data/LC50/lc50_processed.csv  -i2 data/LC50/lc50_processed_df_enz.csv  -endpoint ['LC50','EC50'] -effect 'MOR' -ah 0.2069138081114788 -ap 0.615848211066026 -o results/effect/lc50_df_enz_nomor.txt
-# python RASAR.py  -i1 data/LC50/lc50_processed.csv  -i2 data/LC50/lc50_processed_df_gen.csv  -endpoint ['LC50','EC50'] -effect 'MOR' -ah 0.2069138081114788 -ap 0.615848211066026 -o results/effect/lc50_df_gen_nomor.txt
-# python RASAR.py  -i1 data/LC50/lc50_processed.csv  -i2 data/LC50/lc50_processed_df_bcm.csv  -endpoint ['LC50','EC50'] -effect 'MOR' -ah 0.2069138081114788 -ap 0.615848211066026 -o results/effect/lc50_df_bcm_nomor.txt
-
-# python RASAR_df.py -i1 lc_db_processed.csv  -idf datafusion_db_processed.csv  -endpoint ['LC50','EC50'] -effect 'MOR' -fixed no -ah 0.5623 -ap 0.0749 -o rasar/df_bi.txt
-# python RASAR_df.py -i1 lc_db_processed.csv  -idf datafusion_db_processed.csv  -endpoint ['LC50','EC50'] -effect 'MOR' -fixed no -ah 0.31622776601683794 -ap 3.625  -o rasar/df_bi2.txt
-# python RASAR_df.py -i1 lc_db_processed.csv  -idf datafusion_db_processed.csv  -endpoint ['LC50','EC50'] -effect 'MOR' -fixed no -ah 1 -ap 1  -o rasar/df_table4_bi.txt
-
-# python RASAR_df.py -i1 lc_db_processed.csv  -idf datafusion_db_processed.csv  -e "multiclass" -endpoint ['LC50','EC50'] -effect 'MOR' -fixed no -ah 0.01268961003167922 -ap 0.3562247890262442  -o rasar/df_mul_test.txt
-# python RASAR_df.py -i1 lc_db_processed.csv  -idf datafusion_db_processed.csv  -e "multiclass" -endpoint ['LC50','EC50'] -effect 'MOR' -fixed no -ah 0.008531678524172814 -ap 0.3039195382313201  -o rasar/df_mul_test2.txt
-#
-
-# python RASAR_df.py -i1 lc_db_processed.csv  -idf datafusion_db_processed.csv  -e "multiclass" -endpoint ['LC50','EC50'] -effect 'MOR' -fixed no -ah 0.01268961003167922 -ap 0.3562247890262442  -o rasar/df_mul_new2.txt
-#
-
-
-# ------------------------------------------------------invitro to invitro(ottdf)----------------------------------------------------------
-# python RASAR_df_cte.py -i1 /local/wujimeng/code_jimeng/data/invitro/invitro_eawag_repeated.csv  -idf  /local/wujimeng/code_jimeng/data/invivo/datafusion_db_processed.csv -endpoint ['LC50','EC50'] -effect 'MOR'  -ah logspace -ap logspace -dbi "no"      -wi "False" -il "both"   -o vitro_e/vitro/vitro_df_rasar_bi_repeated_4.csv
-
-
-# ------------------------------------------------------invitro to invitro(gtt)----------------------------------------------------------
-# binary:
-# python RASAR_df_cte.py     -i1 /local/wujimeng/code_jimeng/data/invitro/invitro_processed.csv   -idf  /local/wujimeng/code_jimeng/data/invivo/datafusion_db_processed.csv  -endpoint ['LC50','EC50'] -ah 0.23357214690901212 -ap 0.11288378916846889 -n 4 -o vitro_e/vivo+vitro/general/vitro_df_rasar_bi_4.csv
-
-# multiclass & R=5:
 
 # invitro_form = args.invitro_label
-# db_invitro = args.db_invitro
 # invitro = args.w_invitro
+
+
+# if invitro == "own":
+#     train_rf = pd.DataFrame()
+#     test_rf = pd.DataFrame()
+
 # if str(db_invitro) == "overlap":
 #     if (invitro != "False") & (invitro_form == "number"):
 #         train_rf["invitro_conc"] = X_trainvalid.invitro_conc.reset_index(drop=True)
 #         test_rf["invitro_conc"] = X_valid.invitro_conc.reset_index(drop=True)
 
 #     elif (invitro != "False") & (invitro_form == "label"):
-#         train_rf["invitro_label"] = X_trainvalid.invitro_label_half.reset_index(
-#             drop=True
-#         )
-#         test_rf["invitro_label"] = X_valid.invitro_label_half.reset_index(drop=True)
+#         train_rf["invitro_label"] = X_trainvalid.invitro_label.reset_index(drop=True)
+#         test_rf["invitro_label"] = X_valid.invitro_label.reset_index(drop=True)
 
 #     elif (invitro != "False") & (invitro_form == "both"):
 #         train_rf["invitro_conc"] = X_trainvalid.invitro_conc.reset_index(drop=True)
 #         test_rf["invitro_conc"] = X_valid.invitro_conc.reset_index(drop=True)
-#         train_rf["invitro_label"] = X_trainvalid.invitro_label_half.reset_index(
-#             drop=True
-#         )
-#         test_rf["invitro_label"] = X_valid.invitro_label_half.reset_index(drop=True)
+#         train_rf["invitro_label"] = X_trainvalid.invitro_label.reset_index(drop=True)
+#         test_rf["invitro_label"] = X_valid.invitro_label.reset_index(drop=True)
+# else:
+#     if (invitro != "False") & (invitro_form == "number"):
+#         ls = np.array(db_invitro_matrix_train.idxmin(axis=1))
+#         # dist = db_invitro_matrix_train.lookup(pd.Series(ls).index, pd.Series(ls).values)
+#         dist = np.array(db_invitro_matrix_train.min(axis=1))
+#         conc = db_invitro.iloc[ls, :].invitro_conc.reset_index(drop=True)
+#         train_rf["invitro_conc"] = np.array(conc)
+#         train_rf["invitro_dist"] = dist
 
-#     elif (invitro != "False") & (invitro_form == "label_half"):
-#         train_rf["invitro_label_half"] = X.iloc[
-#             train_index, :
-#         ].invitro_label.reset_index(drop=True)
-#         test_rf["invitro_label_half"] = X.iloc[test_index, :].invitro_label.reset_index(
-#             drop=True
-#         )
+#         ls = np.array(db_invitro_matrix_test.idxmin(axis=1))
+#         # dist = db_invitro_matrix_test.lookup(pd.Series(ls).index, pd.Series(ls).values)
+#         dist = np.array(db_invitro_matrix_test.min(axis=1))
+#         conc = db_invitro.iloc[ls, :].invitro_conc.reset_index(drop=True)
+#         test_rf["invitro_conc"] = np.array(conc)
+#         test_rf["invitro_dist"] = dist
+#         # print(np.array(conc))
 
-#     elif (invitro != "False") & (invitro_form == "both_half"):
-#         train_rf["invitro_conc"] = X.iloc[train_index, :].invitro_conc.reset_index(
-#             drop=True
-#         )
-#         test_rf["invitro_conc"] = X.iloc[test_index, :].invitro_conc.reset_index(
-#             drop=True
-#         )
-#         train_rf["invitro_label_half"] = X.iloc[
-#             train_index, :
-#         ].invitro_label.reset_index(drop=True)
-#         test_rf["invitro_label_half"] = X.iloc[test_index, :].invitro_label.reset_index(
-#             drop=True
-#         )
+#     elif (invitro != "False") & (invitro_form == "label"):
+#         dist = np.array(db_invitro_matrix_train.min(axis=1))
+#         ls = np.array(db_invitro_matrix_train.idxmin(axis=1))
+#         label = db_invitro.iloc[ls, :].invitro_label.reset_index(drop=True)
+#         # dist = db_invitro_matrix_train.lookup(pd.Series(ls).index, pd.Series(ls).values)
+#         train_rf["invitro_label"] = np.array(label)
+#         train_rf["invitro_dist"] = dist
 
+#         dist = np.array(db_invitro_matrix_test.min(axis=1))
+#         ls = np.array(db_invitro_matrix_test.idxmin(axis=1))
+#         label = db_invitro.iloc[ls, :].invitro_label.reset_index(drop=True)
+#         # dist = db_invitro_matrix_test.lookup(pd.Series(ls).index, pd.Series(ls).values)
+#         test_rf["invitro_label"] = np.array(label)
+#         test_rf["invitro_dist"] = dist
+
+#     elif (invitro != "False") & (invitro_form == "both"):
+
+#         dist = np.array(db_invitro_matrix_train.min(axis=1))
+#         ls = np.array(db_invitro_matrix_train.idxmin(axis=1))
+#         conc = db_invitro.iloc[ls, :].invitro_conc.reset_index(drop=True)
+#         label = db_invitro.iloc[ls, :].invitro_label.reset_index(drop=True)
+#         train_rf["invitro_conc"] = np.array(conc)
+#         train_rf["invitro_label"] = np.array(label)
+#         train_rf["invitro_dist"] = dist
+
+#         dist = np.array(db_invitro_matrix_test.min(axis=1))
+#         ls = np.array(db_invitro_matrix_test.idxmin(axis=1))
+#         conc = db_invitro.iloc[ls, :].invitro_conc.reset_index(drop=True)
+#         label = db_invitro.iloc[ls, :].invitro_label.reset_index(drop=True)
+#         test_rf["invitro_conc"] = np.array(conc)
+#         test_rf["invitro_label"] = np.array(label)
+#         test_rf["invitro_dist"] = dist
 
 # del (
 #     datafusion_rasar_test,
@@ -413,7 +416,7 @@ df2file(df_output, args.outputFile)
 #     simple_rasar_test,
 #     simple_rasar_train,
 # )
-# print(train_rf.columns)
+# print(train_rf.columns[:30])
 # if encoding == "binary":
 
 #     model.fit(train_rf, Y_trainvalid)
@@ -457,15 +460,15 @@ df2file(df_output, args.outputFile)
 # 		\nPrecision:  {}, Se.Precision: {}
 # 		\nf1_score:{}, Se.f1_score:{}""".format(
 #         accs,
-#         best_result["se_accs"],
+#         best_results["se_accs"],
 #         sens,
-#         best_result["se_sens"],
+#         best_results["se_sens"],
 #         specs,
-#         best_result["se_specs"],
+#         best_results["se_specs"],
 #         precs,
-#         best_result["se_precs"],
+#         best_results["se_precs"],
 #         f1,
-#         best_result["se_f1"],
+#         best_results["se_f1"],
 #     )
 # )
 
@@ -478,22 +481,20 @@ df2file(df_output, args.outputFile)
 #     \nPrecision:  {}, Se.Precision: {}
 #     \nf1_score:{}, Se.f1_score:{}""".format(
 #         accs,
-#         best_result["se_accs"],
+#         best_results["se_accs"],
 #         sens,
-#         best_result["se_sens"],
+#         best_results["se_sens"],
 #         specs,
-#         best_result["se_specs"],
+#         best_results["se_specs"],
 #         precs,
-#         best_result["se_precs"],
+#         best_results["se_precs"],
 #         f1,
-#         best_result["se_f1"],
+#         best_results["se_f1"],
 #     )
 # )
 
-# info.append(
-#     "Alpha_h:{}, Alpha_p: {},neighbors:{}".format(best_ah, best_ap, args.n_neighbors)
-# )
-# info.append("Random state:{}".format(rand))
+# info.append("Alpha_h:{}, Alpha_p: {},n:{}".format(best_ah, best_ap, args.n_neighbors))
+# info.append("Random state".format(rand))
 # filename = args.outputFile
 # dirname = os.path.dirname(filename)
 # if not os.path.exists(dirname):
@@ -504,19 +505,20 @@ df2file(df_output, args.outputFile)
 #         file_handler.write("{}\n".format(item))
 
 
-#  waiting:
-# python RASAR_df.py -i1 data/invivo/invivo_repeated_w_invitro.csv         -idf  data/invivo/datafusion_db_processed.csv -endpoint ['LC50','EC50'] -effect 'MOR'  -n 4 -ah logspace -ap logspace -dbi "overlap" -wi "True"  -il "both"        -o vivo+vitro(t&e)/bestR/repeat_both_df.txt
-# python RASAR_df.py -i1 data/invivo/invivo_repeated_w_invitro.csv         -idf  data/invivo/datafusion_db_processed.csv -endpoint ['LC50','EC50'] -effect 'MOR'  -n 4 -ah logspace -ap logspace -dbi "overlap" -wi "own"   -il "both"        -o vivo+vitro(t&e)/bestR/repeat_own_both_df.txt
-# python RASAR_df.py -i1 data/invivo/invivo_repeated_w_invitro_eawag.csv   -idf  data/invivo/datafusion_db_processed.csv -endpoint ['LC50','EC50'] -effect 'MOR'  -n 4 -ah logspace -ap logspace -dbi "overlap" -wi "True"  -il "both"        -o "vitro_e/vivo+vitro/bestR/repeat_both_df.txt"
-# python RASAR_df.py -i1 data/invivo/invivo_repeated_w_invitro_eawag.csv   -idf  data/invivo/datafusion_db_processed.csv -endpoint ['LC50','EC50'] -effect 'MOR'  -n 4 -ah logspace -ap logspace -dbi "overlap" -wi "own"   -il "both"        -o "vitro_e/vivo+vitro/bestR/repeat_own_both_df.txt"
-# python RASAR_df.py -i1 data/invivo/invivo_repeated_w_invitro_toxcast.csv -idf  data/invivo/datafusion_db_processed.csv -endpoint ['LC50','EC50'] -effect 'MOR'  -n 4 -ah logspace -ap logspace -dbi "overlap" -wi "True"  -il "both"        -o "vitro_t/vivo+vitro/bestR/repeat_both_df.txt"
-# python RASAR_df.py -i1 data/invivo/invivo_repeated_w_invitro_toxcast.csv -idf  data/invivo/datafusion_db_processed.csv -endpoint ['LC50','EC50'] -effect 'MOR'  -n 4 -ah logspace -ap logspace -dbi "overlap" -wi "own"   -il "both"        -o "vitro_t/vivo+vitro/bestR/repeat_own_both_df.txt"
-# python RASAR_df.py -i1 data/invivo/invivo_repeated_w_invitro.csv         -idf  data/invivo/datafusion_db_processed.csv -endpoint ['LC50','EC50'] -effect 'MOR'  -n 4 -ah logspace -ap logspace -dbi "overlap" -wi "True"  -il "both_half"   -o vivo+vitro(t&e)/bestR/repeat_both_df_half.txt
-# python RASAR_df.py -i1 data/invivo/invivo_repeated_w_invitro.csv         -idf  data/invivo/datafusion_db_processed.csv -endpoint ['LC50','EC50'] -effect 'MOR'  -n 4 -ah logspace -ap logspace -dbi "overlap" -wi "own"   -il "both_half"   -o vivo+vitro(t&e)/bestR/repeat_own_both_df_half.txt
-# python RASAR_df.py -i1 data/invivo/invivo_repeated_w_invitro_eawag.csv   -idf  data/invivo/datafusion_db_processed.csv -endpoint ['LC50','EC50'] -effect 'MOR'  -n 4 -ah logspace -ap logspace -dbi "overlap" -wi "True"  -il "both_half"   -o "vitro_e/vivo+vitro/bestR/repeat_both_df_half.txt"
-# python RASAR_df.py -i1 data/invivo/invivo_repeated_w_invitro_eawag.csv   -idf  data/invivo/datafusion_db_processed.csv -endpoint ['LC50','EC50'] -effect 'MOR'  -n 4 -ah logspace -ap logspace -dbi "overlap" -wi "own"   -il "both_half"   -o "vitro_e/vivo+vitro/bestR/repeat_own_both_df_half.txt"
-# python RASAR_df.py -i1 data/invivo/invivo_repeated_w_invitro_toxcast.csv -idf  data/invivo/datafusion_db_processed.csv -endpoint ['LC50','EC50'] -effect 'MOR'  -n 4 -ah logspace -ap logspace -dbi "overlap" -wi "True"  -il "both_half"   -o "vitro_t/vivo+vitro/bestR/repeat_both_df_half.txt"
-# python RASAR_df.py -i1 data/invivo/invivo_repeated_w_invitro_toxcast.csv -idf  data/invivo/datafusion_db_processed.csv -endpoint ['LC50','EC50'] -effect 'MOR'  -n 4 -ah logspace -ap logspace -dbi "overlap" -wi "own"   -il "both_half"   -o "vitro_t/vivo+vitro/bestR/repeat_own_both_df_half.txt"
+# ---------------------------------old:
+# python RASAR_df_addinginvitro.py -i data/invivo/lc50_processed_jim.csv  -i2 data/invivo/datafusion_db_processed.csv -dbi data/invitro/invitro_merged.csv -endpoint ['LC50','EC50'] -effect 'MOR' -wi "True"  -ah 0.041753189365604 -ap 4.893900918477494  -o "vivo+vitro(t&e)/general_df.txt"
+# python RASAR_df_addinginvitro.py -i data/invivo/lc50_processed_jim.csv  -i2 data/invivo/datafusion_db_processed.csv -dbi data/invitro/invitro_merged.csv -endpoint ['LC50','EC50'] -effect 'MOR' -wi "own"   -ah 0.041753189365604 -ap 4.893900918477494  -o "vivo+vitro(t&e)/general_own_invitro_df.txt"
+# python RASAR_df_addinginvitro.py -i data/invivo/lc50_processed_jim.csv  -i2 data/invivo/datafusion_db_processed.csv -dbi data/invitro/invitro_merged.csv -endpoint ['LC50','EC50'] -effect 'MOR' -wi "False" -ah 0.041753189365604 -ap 4.893900918477494  -o invitro/general_compared_df.txt
+#
 
 
-# new
+# python RASAR_df_addinginvitro.py -i data/invivo/lc50_processed_jim.csv  -i2 data/invivo/datafusion_db_processed.csv -dbi data/invitro/invitro_merged.csv     -endpoint ['LC50','EC50'] -effect 'MOR' -wi "True" -il "number" -n 4 -ah 0.23357214690901212 -ap 0.1128837891684889  -o "vivo+vitro(t&e)/bestR/general_df.txt"
+# python RASAR_df_addinginvitro.py -i data/invivo/lc50_processed_jim.csv  -i2 data/invivo/datafusion_db_processed.csv -dbi data/invitro/invitro_merged.csv     -endpoint ['LC50','EC50'] -effect 'MOR' -wi "own"  -il "number" -n 4 -ah 0.23357214690901212 -ap 0.1128837891684889  -o "vivo+vitro(t&e)/bestR/general_own_invitro_df.txt"
+# python RASAR_df_addinginvitro.py -i data/invivo/lc50_processed_jim.csv  -i2 data/invivo/datafusion_db_processed.csv -dbi data/TOXCAST/toxcast_processed.csv  -endpoint ['LC50','EC50'] -effect 'MOR' -wi "True" -il "number" -n 4 -ah 0.23357214690901212 -ap 0.1128837891684889  -o "vitro_t/vivo&vitro/bestR/general_df.txt"
+# python RASAR_df_addinginvitro.py -i data/invivo/lc50_processed_jim.csv  -i2 data/invivo/datafusion_db_processed.csv -dbi data/TOXCAST/toxcast_processed.csv  -endpoint ['LC50','EC50'] -effect 'MOR' -wi "own"  -il "number" -n 4 -ah 0.23357214690901212 -ap 0.1128837891684889  -o "vitro_t/vivo&vitro/bestR/general_own_invitro_df.txt"
+# python RASAR_df_addinginvitro.py -i data/invivo/lc50_processed_jim.csv  -i2 data/invivo/datafusion_db_processed.csv -dbi data/invitro/invitro_merged.csv     -endpoint ['LC50','EC50'] -effect 'MOR' -wi "False"             -n 4 -ah 0.23357214690901212 -ap 0.1128837891684889  -o "vivo+vitro(t&e)/bestR/general_false_df.txt"
+
+
+# python RASAR_df_addinginvitro.py -i data/invivo/lc50_processed_jim.csv  -i2 data/invivo/datafusion_db_processed.csv -dbi data/invitro/invitro_merged.csv     -endpoint ['LC50','EC50'] -effect 'MOR' -wi "True"                   -ah 0.041753189365604   -ap 4.893900918477494   -o "vivo+vitro(t&e)/general_df.txt"
+# python RASAR_df_addinginvitro.py -i data/invivo/lc50_processed_jim.csv  -i2 data/invivo/datafusion_db_processed.csv -dbi data/invitro/invitro_merged.csv     -endpoint ['LC50','EC50'] -effect 'MOR' -wi "own"                    -ah 0.041753189365604   -ap 4.893900918477494   -o "vivo+vitro(t&e)/general_own_invitro_df.txt"
+#
