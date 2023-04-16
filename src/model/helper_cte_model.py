@@ -40,13 +40,6 @@ from sklearn.model_selection import (
 )
 
 
-
-
-
-
-
-
-
 warnings.filterwarnings("ignore")
 
 # categorical features will ordinal encoded
@@ -78,7 +71,13 @@ categorical_invitro = [
     "fbs",
 ]
 
-categorical_both = ["class", "tax_order", "family", "genus", "species"] # for in vitro and in vivo
+categorical_both = [
+    "class",
+    "tax_order",
+    "family",
+    "genus",
+    "species",
+]  # for in vitro and in vivo
 
 
 # non_categorical was numerical features, whcih will be standarized. \
@@ -123,12 +122,7 @@ non_categorical_invitro = [
 tqdm.pandas(desc="Bar")
 
 
-
-
-
-
-#------------------------------------------------------------ input  preprocess: data labelling and encoding, model parameter setting----------
-
+# ------------------------------------------------------------ input  preprocess: data labelling and encoding, model parameter setting----------
 
 
 def encoding_categorical_invitro(cat_cols, database_1, database_2, database_3):
@@ -214,11 +208,12 @@ def encoding_categorical(cat_cols, database, database_df):
 
     return database, database_df
 
+
 def get_col_ls(label):
-    '''
+    """
     This function returns categorical feature list and concentration column name given the input file type, \
         if the in vitro file comes from Utox lab in eawag Toxcast database, both, or input data is not in vitro dataset.
-    '''
+    """
     # categorical features will ordinal encoded
     # non_categorical was numerical features, whcih will be standarized. \
     # Mol,bonds_number, atom_number was previously log transformed due to the maginitude of their values.
@@ -261,90 +256,104 @@ def get_col_ls(label):
 def change_label(x):
     return x.str.replace("", " ").str.strip().str.split(" ")
 
+
 def set_hyperparameters(model_type):
     if model_type == "LR":
         model = LogisticRegression(random_state=1)
 
         hyper_params_tune = {
-        "penalty": ["l1", "l2", "elasticnet", "none"],
-        "dual": [True, False],
-        "fit_intercept": [True, False],
-        # "intercept_scaling": np.logspace(-4, 4, 10),
-        "intercept_scaling": np.logspace(-4, 4, 10),
-        "C": np.logspace(-4, 4, 10),
-        "criterion": ["gini", "entropy", "log_loss"],
-        "solver": ["newton-cg", "lbfgs", "liblinear", "sag", "saga"],
-        # "max_iter": np.logspace(0, 3, 10),
-        "max_iter": np.logspace(0, 3, 10),
-        "multi_class": ["auto", "ovr", "multinomial"],
-        "warm_start": [True, False],
-        "l1_ratio": np.logspace(-1, 0, 10),
-        "class_weight": [{0: i, 1: 1} for i in range(0, 10)],
-        "tol": np.logspace(-3, 3, 8),
+            "penalty": ["l1", "l2", "elasticnet", "none"],
+            "dual": [True, False],
+            "fit_intercept": [True, False],
+            # "intercept_scaling": np.logspace(-4, 4, 10),
+            "intercept_scaling": np.logspace(-4, 4, 10),
+            "C": np.logspace(-4, 4, 10),
+            "criterion": ["gini", "entropy", "log_loss"],
+            "solver": ["newton-cg", "lbfgs", "liblinear", "sag", "saga"],
+            # "max_iter": np.logspace(0, 3, 10),
+            "max_iter": np.logspace(0, 3, 10),
+            "multi_class": ["auto", "ovr", "multinomial"],
+            "warm_start": [True, False],
+            "l1_ratio": np.logspace(-1, 0, 10),
+            "class_weight": [{0: i, 1: 1} for i in range(0, 10)],
+            "tol": np.logspace(-3, 3, 8),
         }
-        
+
     elif model_type == "RF":
         model = RandomForestClassifier(random_state=1)
 
         hyper_params_tune = {
-        # "n_estimators": [int(x) for x in np.linspace(start=1, stop=5, num=5)],
-        # "max_features": [i for i in range(1, 4, 1)],
-        # "max_depth": [i for i in np.linspace(start=0.01, stop=1, num=5)],
-        # "min_samples_leaf": [i for i in np.linspace(start=0.01, stop=0.5, num=5)],
-        # "min_samples_split": [i for i in np.linspace(start=0.1, stop=1, num=5)],
-        # ---------------------------------
-        # "n_estimators": [int(x) for x in np.linspace(start=1, stop=150, num=5)],
-        # # "max_features": [i for i in range(1, 4, 1)],
-        # "max_depth": [i for i in range(1, 10, 2)]
-        # + [i for i in range(10, 100, 20)]
-        # + [None],
-        # "min_samples_leaf": [i for i in np.linspace(start=0.1, stop=0.5, num=5)],
-        # "min_samples_split": [i for i in np.linspace(start=0.1, stop=1, num=5)],
-        # "max_samples": [i for i in np.linspace(start=0.1, stop=1, num=5)],
-        # --------------------------------------------
-        "n_estimators": [int(x) for x in np.linspace(start=10, stop=100, num=5)]
-        + [int(x) for x in np.linspace(start=2, stop=5, num=4)],
-        "max_depth": [i for i in np.linspace(start=0.01, stop=1, num=5)]
-        + [i for i in range(2, 10, 1)]
-        + [i for i in range(10, 100, 20)]
-        + [None],
-        "min_samples_leaf": [i for i in np.linspace(start=0.01, stop=0.5, num=5)]
-        + [i for i in np.linspace(start=0.1, stop=0.4, num=4)]
-        + [1, 2, 4],
-        "min_samples_split": [i for i in np.linspace(start=0.1, stop=1, num=5)]
-        + [2, 4, 6],
-        "max_samples": [i for i in np.linspace(start=0.1, stop=1, num=5)]
-        + [i for i in np.linspace(start=0.2, stop=0.9, num=8)],
-        # ---------------------------------------------
-        # "n_estimators": [int(x) for x in np.linspace(start=1, stop=150, num=5)],
-        # "max_depth": [i for i in range(1, 10, 2)]
-        # + [i for i in range(10, 100, 20)]
-        # + [None],
-        # "min_samples_leaf": [i for i in np.linspace(start=0.1, stop=0.5, num=5)],
-        # "min_samples_split": [i for i in np.linspace(start=0.1, stop=1, num=5)],
-        # "max_samples": [i for i in np.linspace(start=0.1, stop=1, num=5)],
+            # "n_estimators": [int(x) for x in np.linspace(start=1, stop=5, num=5)],
+            # "max_features": [i for i in range(1, 4, 1)],
+            # "max_depth": [i for i in np.linspace(start=0.01, stop=1, num=5)],
+            # "min_samples_leaf": [i for i in np.linspace(start=0.01, stop=0.5, num=5)],
+            # "min_samples_split": [i for i in np.linspace(start=0.1, stop=1, num=5)],
+            # ---------------------------------
+            # "n_estimators": [int(x) for x in np.linspace(start=1, stop=150, num=5)],
+            # # "max_features": [i for i in range(1, 4, 1)],
+            # "max_depth": [i for i in range(1, 10, 2)]
+            # + [i for i in range(10, 100, 20)]
+            # + [None],
+            # "min_samples_leaf": [i for i in np.linspace(start=0.1, stop=0.5, num=5)],
+            # "min_samples_split": [i for i in np.linspace(start=0.1, stop=1, num=5)],
+            # "max_samples": [i for i in np.linspace(start=0.1, stop=1, num=5)],
+            # --------------------------------------------
+            "n_estimators": [int(x) for x in np.linspace(start=10, stop=100, num=5)]
+            + [int(x) for x in np.linspace(start=2, stop=5, num=4)],
+            "max_depth": [i for i in np.linspace(start=0.01, stop=1, num=5)]
+            + [i for i in range(2, 10, 1)]
+            + [i for i in range(10, 100, 20)]
+            + [None],
+            "min_samples_leaf": [i for i in np.linspace(start=0.01, stop=0.5, num=5)]
+            + [i for i in np.linspace(start=0.1, stop=0.4, num=4)]
+            + [1, 2, 4],
+            "min_samples_split": [i for i in np.linspace(start=0.1, stop=1, num=5)]
+            + [2, 4, 6],
+            "max_samples": [i for i in np.linspace(start=0.1, stop=0.9, num=5)]
+            + [i for i in np.linspace(start=0.2, stop=0.9, num=8)],
+            # ---------------------------------------------
+            # "n_estimators": [int(x) for x in np.linspace(start=1, stop=150, num=5)],
+            # "max_depth": [i for i in range(1, 10, 2)]
+            # + [i for i in range(10, 100, 20)]
+            # + [None],
+            # "min_samples_leaf": [i for i in np.linspace(start=0.1, stop=0.5, num=5)],
+            # "min_samples_split": [i for i in np.linspace(start=0.1, stop=1, num=5)],
+            # "max_samples": [i for i in np.linspace(start=0.1, stop=1, num=5)],
         }
 
     elif model_type == "DT":
         hyper_params_tune = {
-        "criterion": ["gini", "entropy"],
-        "splitter": ["best", "random"],
-        "max_depth": [int(x) for x in np.linspace(start=10, stop=100, num=5)],
-        "min_samples_split": [int(x) for x in np.linspace(start=10, stop=100, num=5)],
-        "min_samples_leaf": [int(x) for x in np.linspace(start=10, stop=100, num=5)],
-        "min_weight_fraction_leaf": [x for x in np.linspace(start=0, stop=0.5, num=5)],
-        "max_features": ["auto", "sqrt", "log2"],
-        "max_leaf_nodes": [int(x) for x in np.linspace(start=10, stop=100, num=5)],
-        "min_impurity_decrease": [i for i in np.linspace(start=0.01, stop=1, num=5)],
-        "class_weight": [{0: i, 1: 1} for i in range(0, 10)],
-        "ccp_alphanon-negative": [i for i in np.linspace(start=0.01, stop=1, num=5)],
+            "criterion": ["gini", "entropy"],
+            "splitter": ["best", "random"],
+            "max_depth": [int(x) for x in np.linspace(start=10, stop=100, num=5)],
+            "min_samples_split": [
+                int(x) for x in np.linspace(start=10, stop=100, num=5)
+            ],
+            "min_samples_leaf": [
+                int(x) for x in np.linspace(start=10, stop=100, num=5)
+            ],
+            "min_weight_fraction_leaf": [
+                x for x in np.linspace(start=0, stop=0.5, num=5)
+            ],
+            "max_features": ["auto", "sqrt", "log2"],
+            "max_leaf_nodes": [int(x) for x in np.linspace(start=10, stop=100, num=5)],
+            "min_impurity_decrease": [
+                i for i in np.linspace(start=0.01, stop=1, num=5)
+            ],
+            "class_weight": [{0: i, 1: 1} for i in range(0, 10)],
+            "ccp_alphanon-negative": [
+                i for i in np.linspace(start=0.01, stop=1, num=5)
+            ],
         }
         model = DecisionTreeClassifier(random_state=1)
-    return hyper_params_tune,model
 
-def conc_to_label(df, thres):
+    return hyper_params_tune, model
+
+
+def vitroconc_to_label(df, thres):
     df["invitro_label"] = np.where(df["invitro_conc"] > thres, 0, 1)
     return df
+
 
 def add_fish_column(df):
     df["fish"] = (
@@ -361,7 +370,7 @@ def add_fish_column(df):
     return df
 
 
-#--------------------------------------------------------------data splitting------------------
+# --------------------------------------------------------------data splitting------------------
 def get_train_test_data(db_mortality, traintest_idx, valid_idx, conc_column):
 
     X_trainvalid = db_mortality.drop(columns=conc_column).iloc[traintest_idx, :]
@@ -369,6 +378,7 @@ def get_train_test_data(db_mortality, traintest_idx, valid_idx, conc_column):
     Y_trainvalid = db_mortality.iloc[traintest_idx, :][conc_column].values
     Y_valid = db_mortality.iloc[valid_idx, :][conc_column].values
     return X_trainvalid, X_valid, Y_trainvalid, Y_valid
+
 
 def get_grouped_train_test_split(df_all, test_size, col_groups, rand=2):
     """
@@ -391,7 +401,9 @@ def get_grouped_train_test_split(df_all, test_size, col_groups, rand=2):
 
     return trainvalid_idx, test_idx
 
-#-----------------------------------------------------------------results-------------------
+
+# -----------------------------------------------------------------results-------------------
+
 
 def fit_and_predict(model, X_train, y_train, X_test, y_test, encoding="binary"):
     """fit the model and predict the score on the test data."""
@@ -420,7 +432,6 @@ def fit_and_predict(model, X_train, y_train, X_test, y_test, encoding="binary"):
     return df_output
 
 
-
 def dataset_acc(trainvalid, valid, label_trainvalid, label_valid):
     """compare the invitro label and predicted invivo label"""
     dict_acc = {}
@@ -437,7 +448,6 @@ def dataset_acc(trainvalid, valid, label_trainvalid, label_valid):
     return dict_acc
 
 
-
 def result_describe(results):
     df_output = pd.concat(results, axis=0)
     df_mean = pd.DataFrame(df_output.mean(axis=0)).transpose()
@@ -445,7 +455,7 @@ def result_describe(results):
     return df_mean, df_std
 
 
-def save_results(params, ah, ap, result_stats, df_test_score, dict_acc):
+def save_results(params, ah, ap, result_stats, df_test_score, dict_acc,thres="median"):
 
     temp_grid = pd.DataFrame()
     if params == "default":
@@ -465,7 +475,7 @@ def save_results(params, ah, ap, result_stats, df_test_score, dict_acc):
         ],
         axis=1,
     )
-
+    temp_grid["threshold"] = thres
     temp_grid["alpha_h"] = ah
     temp_grid["alpha_p"] = ap
     try:
@@ -491,6 +501,7 @@ def save_results(params, ah, ap, result_stats, df_test_score, dict_acc):
 
     return temp_grid
 
+
 def df2file(info, outputFile):
     """save the dataframe into file."""
     filename = outputFile
@@ -501,7 +512,7 @@ def df2file(info, outputFile):
     print("\n", "Result saved.")
 
 
-#-------------------------------------------------------------------load data-------------------------------
+# -------------------------------------------------------------------load data-------------------------------
 def load_data_mlp(DATA_PATH, encoding, encoding_value=1, seed=42):
     db = pd.read_csv(DATA_PATH).drop(columns=["Unnamed: 0"]).drop_duplicates()
     db_raw = db.copy()
@@ -657,6 +668,7 @@ def load_data(
     db = add_fish_column(db)
     return db
 
+
 def load_data_fish(DATA_PATH, DATA_PATH_fish, encoding, encoding_value=1, seed=42):
     db = pd.read_csv(DATA_PATH).drop(columns=["Unnamed: 0"]).drop_duplicates()
     db_fish = pd.read_csv(DATA_PATH_fish).drop(columns=["Unnamed: 0"]).drop_duplicates()
@@ -724,7 +736,7 @@ def load_invivo_invitro(
     encoder = OrdinalEncoder(dtype=int)
     encoder.fit(db[cate])
     db[cate] = encoder.transform(db[cate]) + 1
-    
+
     try:
         db_invitro = db_invitro.rename(columns={"ec50": "invitro_conc"})
     except:
@@ -747,6 +759,7 @@ def load_invivo_invitro(
     # Y = db["conc1_mean"].values
 
     return db, db_invitro
+
 
 def load_datafusion_datasets(
     DATA_MORTALITY_PATH,
@@ -1035,7 +1048,7 @@ def load_datafusion_datasets_invitro(
     return db_mortality, db_datafusion, db_invitro
 
 
-#--------------------------------------------------------------------distance matrices-------------------
+# --------------------------------------------------------------------distance matrices-------------------
 def hamming_matrix(X1, X2, cat_features):
     if X1.shape == X2.shape:
         if np.all(X1 == X2):
@@ -1094,6 +1107,7 @@ def matrix_combine(basic_mat, matrix_h, matrix_p, ah, ap):
     dist_matr = pd.DataFrame(dist_matr)
     return dist_matr
 
+
 def dist_matrix(X1, X2, non_categorical, categorical, ah, ap):
 
     matrix_h = hamming_matrix(X1, X2, categorical)
@@ -1120,19 +1134,21 @@ def cal_matrixs(X1, X2, categorical, non_categorical):
     matrices["pubchem"] = matrix_p
     return matrices
 
+
 def normalized_invitro_matrix(X_traintest, invitro_matrices, ah, ap):
     max_euc = pd.DataFrame(
         euclidean_matrix(X_traintest, X_traintest, non_categorical,)
     ).values.max()
 
-    matrix_invitro_euc = pd.DataFrame(invitro_matrices[2])
+    matrix_invitro_euc = pd.DataFrame(invitro_matrices["euc"])
 
     db_invitro_matrix_norm = pd.DataFrame(
-        ah * invitro_matrices[0]
-        + ap * invitro_matrices[1]
+        ah * invitro_matrices["hamming"]
+        + ap * invitro_matrices["pubchem"]
         + matrix_invitro_euc.divide(max_euc).values
     )
     return db_invitro_matrix_norm
+
 
 def get_traintest_matrices(matrices, fold, ah, ap):
     matrix_euc = pd.DataFrame(matrices["euc"])
@@ -1544,10 +1560,9 @@ def RASAR_simple(
         df_fishchem_tv, groups=df_fishchem_tv[col_groups]
     ):
 
-        dist_matr_train,dist_matr_test = get_traintest_matrices(
-                                        matrices,[train_index,test_index], ah, ap
-                                    )
-
+        dist_matr_train, dist_matr_test = get_traintest_matrices(
+            matrices, [train_index, test_index], ah, ap
+        )
 
         y_train = Y[train_index]
         y_test = Y[test_index]
@@ -1566,7 +1581,7 @@ def RASAR_simple(
                 test_rf = get_vitroinfo(test_rf, X, test_index, invitro_form)
             else:
                 matrix_euc = pd.DataFrame(matrices["euc"])
-                max_euc = matrix_euc.iloc[train_index,train_index].values.max()
+                max_euc = matrix_euc.iloc[train_index, train_index].values.max()
 
                 db_invitro_matrix_normed = pd.DataFrame(
                     ah * db_invitro_matrices["hamming"]
@@ -1851,9 +1866,9 @@ def cv_datafusion_rasar(
                 test_rf = get_vitroinfo(test_rf, X_copy, test_index, invitro_form)
             else:
                 matrices_invitro_normed = pd.DataFrame(
-                    ah * matrices_invitro['hamming']
-                    + ap * matrices_invitro['pubchem']
-                    + pd.DataFrame(matrices_invitro['euc']).divide(max_euc).values
+                    ah * matrices_invitro["hamming"]
+                    + ap * matrices_invitro["pubchem"]
+                    + pd.DataFrame(matrices_invitro["euc"]).divide(max_euc).values
                 )
                 train_rf = find_nearest_vitro(
                     train_rf,
@@ -2183,5 +2198,4 @@ def cv_datafusion_rasar_multiclass(
     results["fold"] = kf
     results["model"] = rfc
     return results
-
 

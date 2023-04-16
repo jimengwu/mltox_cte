@@ -18,32 +18,100 @@ from pebble import ProcessPool
 from concurrent.futures import TimeoutError
 import traceback
 
-sys.modules["__main__"].__file__ = "ipython"
+# sys.modules["__main__"].__file__ = "ipython"
 
 # this file are used to test the neighbor number's effect in simple RASAR function. \
 # different straitifed way are also been looked.
 
+
 def getArguments():
-    parser = argparse.ArgumentParser(description="Running simple RASAR with different neighbor number \
+    parser = argparse.ArgumentParser(
+        description="Running simple RASAR with different neighbor number \
                                      for stratified splitted datasets, selcting the best alphas and hyperparameters \
-                                     at the same time, for each stratified time.")
-    parser.add_argument("-i", "--input", dest="inputFile", required=True)
+                                     at the same time, for each stratified time."
+    )
+    parser.add_argument(
+        "-i", "--input", dest="inputFile", help="input file position", required=True
+    )
+    parser.add_argument(
+        "-iv",
+        "--input_vitro",
+        dest="inputFile_vitro",
+        help="input invitro file position",
+        default="no",
+    )
     parser.add_argument("-ah", "--alpha_h", dest="hamming_alpha", default="logspace")
     parser.add_argument("-ap", "--alpha_p", dest="pubchem2d_alpha", default="logspace")
-    parser.add_argument("-dbi", "--db_invitro", dest="db_invitro", default="noinvitro")
-    parser.add_argument("-e", "--encoding", dest="encoding", default="binary")
     parser.add_argument(
-        "-il", "--invitro_label", dest="invitro_label", default="number"
+        "-dbi",
+        "--db_invitro",
+        dest="db_invitro",
+        help="yes: add in vitro as other source for distance matrix, \
+        no: do not use in vitro as input, \
+        overlap: use overlapped in vitro dataset as input feature",
+        default="no",
     )
-    parser.add_argument("-iv", "--invitro_type", dest="invitro_type", default="False")
     parser.add_argument(
-        "-n", "--neighbors", dest="neighbors", required=True, nargs="+", type=int
+        "-e",
+        "--encoding",
+        dest="encoding",
+        help="binary or multiclass (5 class)",
+        default="binary",
     )
-    parser.add_argument("-ni", "--niter", dest="niter", default=5, type=int)
-
-    parser.add_argument("-r", "--repeat", dest="repeat", default=20, type=int)
-    parser.add_argument("-wi", "--w_invitro", dest="w_invitro", default="False")
-
+    parser.add_argument(
+        "-il",
+        "--invitro_label",
+        dest="invitro_label",
+        help="number, label",
+        default="number",
+    )
+    parser.add_argument(
+        "-ivt",
+        "--invitro_type",
+        dest="invitro_type",
+        help="invitro file source: eawag, toxcast, both",
+        default="False",
+    )
+    parser.add_argument(
+        "-m",
+        "--model_type",
+        help="model: logistic regression(LR), random forest(RF),decision tree(DT)",
+        default="RF",
+    )
+    parser.add_argument(
+        "-n",
+        "--neighbors",
+        dest="neighbors",
+        required=True,
+        help="cloest neighbor number in rasar function",
+        nargs="+",
+        type=int,
+    )
+    parser.add_argument(
+        "-ni",
+        "--niter",
+        dest="niter",
+        default=50,
+        help="model iteration number to find the best hyperparameters",
+        type=int,
+    )
+    parser.add_argument(
+        "-r",
+        "--repeat",
+        dest="repeat",
+        help="repeat time for different splitting method",
+        default=20,
+        type=int,
+    )
+    parser.add_argument(
+        "-wi",
+        "--w_invitro",
+        dest="w_invitro",
+        help="own:in vitro alone as input  , \
+            false:in vitro not as input ,\
+            true:use in vitro and in vivo as input",
+        default="False",
+    )
 
     parser.add_argument("-o", "--output", dest="outputFile", default="binary.txt")
     return parser.parse_args()
@@ -64,6 +132,7 @@ def s_rasar_func(
     ah,
     ap,
     matrices_invitro,
+    db_invitro,
     max_euc,
     num,
     model,
@@ -74,11 +143,7 @@ def s_rasar_func(
         test_rf = pd.DataFrame()
     else:
         train_rf, test_rf = cal_s_rasar(
-            dist_matr_train,
-            dist_matr_test,
-            y_train,
-            n_neighbors,
-            args.encoding,
+            dist_matr_train, dist_matr_test, y_train, n_neighbors, args.encoding,
         )
 
     if args.w_invitro != "False":
@@ -93,28 +158,21 @@ def s_rasar_func(
             )
             train_rf = find_nearest_vitro(
                 train_rf,
-                args.db_invitro,
+                db_invitro,
                 db_invitro_matrix_normed,
                 train_index,
                 args.invitro_label,
             )
             test_rf = find_nearest_vitro(
                 test_rf,
-                args.db_invitro,
+                db_invitro,
                 db_invitro_matrix_normed,
                 test_index,
                 args.invitro_label,
             )
         # print(train_rf.columns)
 
-    df_score = fit_and_predict(
-        model,
-        train_rf,
-        y_train,
-        test_rf,
-        y_test,
-        encoding,
-    )
+    df_score = fit_and_predict(model, train_rf, y_train, test_rf, y_test, args.encoding)
     df_score["neighbors"] = n_neighbors
     df_score["ah"] = ah
     df_score["ap"] = ap
@@ -127,7 +185,6 @@ if __name__ == "__main__":
 
     categorical, conc_column = get_col_ls(args.invitro_type)
 
-
     if args.encoding == "binary":
         encoding = "binary"
         encoding_value = 1
@@ -136,7 +193,6 @@ if __name__ == "__main__":
         encoding_value = [0.1, 1, 10, 100]
 
     rand = random.randrange(1, 100)
-
 
     # loading data & splitting into train and test dataset
     print("loading dataset...", ctime())
@@ -158,9 +214,10 @@ if __name__ == "__main__":
             encoding_value=encoding_value,
             seed=42,
         )
+        db_invitro = vitroconc_to_label(
+            db_invitro, db_invitro.invitro_conc.median()
+        )  # labelling the in vitro concentration
     print("finish loaded.", ctime())
-    
-
 
     db_mortality["fish"] = (
         str(db_mortality["class"])
@@ -176,7 +233,7 @@ if __name__ == "__main__":
     df_fishchem = db_mortality[["fish", "test_cas", conc_column]]
 
     idx_record = []
-    # saving information for each splitting time  
+    # saving information for each splitting time
 
     for repeat in range(args.repeat):
 
@@ -191,22 +248,24 @@ if __name__ == "__main__":
         test_size = 0.2
         col_groups = "test_cas"
 
-        traintest_idx, valid_idx = get_grouped_train_test_split(df_fishchem, test_size, col_groups, rand=repeat)
+        traintest_idx, valid_idx = get_grouped_train_test_split(
+            df_fishchem, test_size, col_groups, rand=repeat
+        )
         if list(valid_idx) in idx_record:
             continue
         else:
             idx_record.append(list(valid_idx))
         df_fishchem_tv = df_fishchem.iloc[traintest_idx, :]
-        
-        X_traintest, X_valid, Y_traintest, Y_valid = get_train_test_data(db_mortality, traintest_idx, valid_idx, conc_column)
-        
+
+        X_traintest, X_valid, Y_traintest, Y_valid = get_train_test_data(
+            db_mortality, traintest_idx, valid_idx, conc_column
+        )
+
         X = db_mortality.drop(columns=conc_column)
 
         # -----------------creating the distance matrix--------
         print("calcultaing distance matrix..", ctime())
-        matrices = cal_matrixs(
-            X_traintest, X_traintest, categorical, non_categorical
-        )
+        matrices = cal_matrixs(X_traintest, X_traintest, categorical, non_categorical)
 
         matrices_full = cal_matrixs(X, X, categorical, non_categorical)
 
@@ -214,33 +273,31 @@ if __name__ == "__main__":
             matrices_invitro = cal_matrixs(
                 X_traintest, db_invitro, categorical_both, non_categorical
             )
+            matrices_invitro_full = cal_matrixs(
+                X, db_invitro, categorical_both, non_categorical
+            )
         else:
             matrices_invitro = None
-        
+
         print("distance matrix calculation finished", ctime())
 
         # --------hyperparameter range--------
 
-
-        if args.alpha_h == "logspace":
-            sequence_ah = np.logspace(-2, 0, 3)
+        if args.hamming_alpha == "logspace":
+            sequence_ah = np.logspace(-2, 0, 30)
         else:
             sequence_ah = [float(args.hamming_alpha)]
 
-        if args.alpha_p == "logspace":
-            sequence_ap = np.logspace(-2, 0, 3)
+        if args.pubchem2d_alpha == "logspace":
+            sequence_ap = np.logspace(-2, 0, 30)
         else:
             sequence_ap = [float(args.pubchem2d_alpha)]
 
         # models parameters
-        hyper_params_tune,model = set_hyperparameters(args.model_type)
+        hyper_params_tune, model = set_hyperparameters(args.model_type)
 
         params_comb = list(
-            ParameterSampler(
-                hyper_params_tune,
-                n_iter=args.niter,
-                random_state=rand,
-            )
+            ParameterSampler(hyper_params_tune, n_iter=args.niter, random_state=rand,)
         )
 
         # -------------------training using the default model setting and found the best hyperparameters combination--------------------
@@ -250,10 +307,14 @@ if __name__ == "__main__":
         )
 
         count = 1
-        num_runs = (len(sequence_ap) *len(sequence_ah) * len(args.neighbors)  * args.niter )
+        num_runs = (
+            len(sequence_ap) * len(sequence_ah) * len(args.neighbors) * args.niter
+        )
         best_accs = 0
+
+        grid_search = pd.DataFrame()
+
         for nei in args.neighbors:
-            
             for ah in sequence_ah:
                 for ap in sequence_ap:
                     for j in range(0, len(params_comb)):
@@ -268,8 +329,7 @@ if __name__ == "__main__":
                                 ap,
                                 nei,
                                 "*" * 50,
-                                count
-                                / num_runs,
+                                count / num_runs,
                                 ctime(),
                                 end="\r",
                             )
@@ -278,16 +338,18 @@ if __name__ == "__main__":
                                 for num, fold in enumerate(folds):
                                     y_train = Y_traintest[fold[0]]
                                     y_test = Y_traintest[fold[1]]
-                                    
 
-                                    matrix_euc = pd.DataFrame(matrix_euc)
-                                    max_euc = matrix_euc.iloc[fold[0], fold[0]].values.max()
+                                    matrix_euc = pd.DataFrame(matrices["euc"])
+                                    max_euc = matrix_euc.iloc[
+                                        fold[0], fold[0]
+                                    ].values.max()
 
                                     if args.w_invitro == "own":
                                         train_matrix = pd.DataFrame()
                                         test_matrix = pd.DataFrame()
                                     else:
-                                        (train_matrix,
+                                        (
+                                            train_matrix,
                                             test_matrix,
                                         ) = get_traintest_matrices(
                                             matrices, fold, ah, ap
@@ -307,6 +369,7 @@ if __name__ == "__main__":
                                             ah,
                                             ap,
                                             matrices_invitro,
+                                            db_invitro,
                                             max_euc,
                                             num,
                                             model,
@@ -321,19 +384,22 @@ if __name__ == "__main__":
                                             "function took longer than %d seconds"
                                             % error.args[1]
                                         )
-                                    
+
                                 results = [res.result() for res in results]
 
                             result_stats = result_describe(results)
 
-                            #---------------testing on the validation dataset---------
- 
+                            # ---------------testing on the validation dataset---------
+
                             if args.w_invitro == "own":
                                 train_rf = pd.DataFrame()
                                 test_rf = pd.DataFrame()
                             else:
-                                (matrix_traintest, matrix_valid) = get_traintest_matrices(
-                                matrices_full, [traintest_idx, valid_idx], ah, ap
+                                (
+                                    matrix_traintest,
+                                    matrix_valid,
+                                ) = get_traintest_matrices(
+                                    matrices_full, [traintest_idx, valid_idx], ah, ap
                                 )
 
                                 train_rf, test_rf = cal_s_rasar(
@@ -353,22 +419,22 @@ if __name__ == "__main__":
                                         test_rf, X, valid_idx, args.invitro_label
                                     )
                                 else:
-                                  
-                                    db_invitro_matrix_normed = normalized_invitro_matrix(
-                                                    X_traintest, matrices_invitro, ah, ap
-                                                )
+
+                                    matrices_invitro_full_norm = normalized_invitro_matrix(
+                                        X_traintest, matrices_invitro_full, ah, ap,
+                                    )
 
                                     train_rf = find_nearest_vitro(
                                         train_rf,
-                                        args.db_invitro,
-                                        db_invitro_matrix_normed,
+                                        db_invitro,
+                                        matrices_invitro_full_norm,
                                         traintest_idx,
                                         args.invitro_label,
                                     )
                                     test_rf = find_nearest_vitro(
                                         test_rf,
-                                        args.db_invitro,
-                                        db_invitro_matrix_normed,
+                                        db_invitro,
+                                        matrices_invitro_full_norm,
                                         valid_idx,
                                         args.invitro_label,
                                     )
@@ -385,32 +451,38 @@ if __name__ == "__main__":
                             )
 
                             try:
-                                dict_acc = dataset_acc(X_traintest, X_valid, Y_traintest, Y_valid)
+                                dict_acc = dataset_acc(
+                                    X_traintest, X_valid, Y_traintest, Y_valid
+                                )
                             except:
                                 dict_acc = pd.DataFrame()
 
                             temp_grid = save_results(
-                                        params_comb[j],
-                                        ah,
-                                        ap,
-                                        result_stats,
-                                        df_test_score,
-                                        dict_acc,
-                                    )
+                                params_comb[j],
+                                ah,
+                                ap,
+                                result_stats,
+                                df_test_score,
+                                dict_acc,
+                            )
                             grid_search = pd.concat([grid_search, temp_grid])
 
                             if result_stats[0].accuracy.values[0] > best_accs:
                                 best_accs = result_stats[0].accuracy.values[0]
                                 best_score = temp_grid
-                                print("success found better alphas and hyperparameters", best_accs, end="\r")
+                                print(
+                                    "success found better alphas and hyperparameters",
+                                    best_accs,
+                                    end="\r",
+                                )
 
                         except ValueError as error:
                             logging.error(str(error))
-                        
+
         # ----------------save the information into a file-------
         df2file(grid_search, args.outputFile + "_fullinfo_{}.txt".format(repeat))
-        df2file(best_score,
-        args.outputFile + "_{}.txt".format(repeat),
+        df2file(
+            best_score, args.outputFile + "_{}.txt".format(repeat),
         )
 
 

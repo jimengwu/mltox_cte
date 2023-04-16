@@ -8,11 +8,17 @@ import argparse
 
 def getArguments():
     parser = argparse.ArgumentParser(description="Running KNN_model for datasets.")
-    parser.add_argument("-i", "--input", dest="inputFile", required=True)
-    parser.add_argument("-e", "--encoding", dest="encoding", default="binary")
+    parser.add_argument("-i", "--input", dest="inputFile",help="input file position", required=True)
+    parser.add_argument("-e", "--encoding", dest="encoding", help="binary or multiclass (5 class)",default="binary")
     parser.add_argument("-l", "--leaf_ls", dest="leaf_list", required=True, nargs="+")
     parser.add_argument(
-        "-n", "--neighbors", dest="neighbors", required=True, nargs="+", type=int
+        "-n",
+        "--neighbors",
+        dest="neighbors",
+        required=True,
+        help="cloest neighbor number in rasar function",
+        nargs="+",
+        type=int,
     )
     parser.add_argument("-o", "--output", dest="outputFile", default="binary.txt")
     return parser.parse_args()
@@ -203,11 +209,17 @@ import argparse
 
 def getArguments():
     parser = argparse.ArgumentParser(description="Running KNN_model for datasets.")
-    parser.add_argument("-i", "--input", dest="inputFile", required=True)
-    parser.add_argument("-e", "--encoding", dest="encoding", default="binary")
+    parser.add_argument("-i", "--input", dest="inputFile",help="input file position", required=True)
+    parser.add_argument("-e", "--encoding", dest="encoding", help="binary or multiclass (5 class)",default="binary")
     parser.add_argument("-l", "--leaf_ls", dest="leaf_list", required=True, nargs="+")
     parser.add_argument(
-        "-n", "--neighbors", dest="neighbors", required=True, nargs="+", type=int
+        "-n",
+        "--neighbors",
+        dest="neighbors",
+        required=True,
+        help="cloest neighbor number in rasar function",
+        nargs="+",
+        type=int,
     )
     parser.add_argument("-o", "--output", dest="outputFile", default="binary.txt")
     return parser.parse_args()

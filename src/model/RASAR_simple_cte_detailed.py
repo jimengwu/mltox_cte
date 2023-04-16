@@ -8,33 +8,74 @@ def getArguments():
     parser = argparse.ArgumentParser(
         description="Simple rasar model with adding invitro."
     )
-    parser.add_argument("-i", "--input", dest="inputFile", required=True)
-    parser.add_argument("-iv", "--input_vitro", dest="inputFile_vitro", default="no")
     parser.add_argument(
-        "-ah", "--alpha_h", dest="alpha_h", default="logspace", nargs="?"
+        "-i", "--input", dest="inputFile", help="input file position", required=True
+    )
+    parser.add_argument(
+        "-iv",
+        "--input_vitro",
+        dest="inputFile_vitro",
+        help="input invitro file position",
+        default="no",
+    )
+    parser.add_argument(
+        "-ah", "--alpha_h", dest="hamming_alpha", default="logspace", nargs="?"
     )
     parser.add_argument("-ap", "--alpha_p", dest="alpha_p", nargs="?")
-    parser.add_argument("-dbi", "--db_invitro", dest="db_invitro", default="no")
-    parser.add_argument("-e", "--encoding", dest="encoding", default="binary")
     parser.add_argument(
-        "-if",
-        "--invitroFile",
-        dest="invitroFile",
-        help="if input is invitroFile",
-        default=False,
+        "-dbi",
+        "--db_invitro",
+        dest="db_invitro",
+        help="yes: add in vitro as other source for distance matrix, no: do not use in vitro as input, overlap: use in vitro as input feature",
+        default="no",
     )
     parser.add_argument(
-        "-il", "--invitro_label", dest="invitro_label", default="number"
+        "-e",
+        "--encoding",
+        dest="encoding",
+        help="binary or multiclass (5 class)",
+        default="binary",
     )
-    parser.add_argument("-iv", "--invitro_type", dest="invitro_type", default="False")
     parser.add_argument(
-        "-m", "--model_type", help="model: logistic regression, random forest,decision tree", default="rf",
+        "-il",
+        "--invitro_label",
+        dest="invitro_label",
+        help="number, label",
+        default="number",
+    )
+    parser.add_argument(
+        "-ivt",
+        "--invitro_type",
+        dest="invitro_type",
+        help="invitro file source: eawag, toxcast, both",
+        default="False",
+    )
+    parser.add_argument(
+        "-m",
+        "--model_type",
+        help="model: logistic regression(LR), random forest(RF),decision tree(DT)",
+        default="RF",
     )
     parser.add_argument(
         "-n", "--n_neighbors", dest="n_neighbors", nargs="?", default=1, type=int
     )
-    parser.add_argument("-ni", "--niter", dest="niter", default=50, type=int)
-    parser.add_argument("-wi", "--w_invitro", dest="w_invitro", default="False")
+    parser.add_argument(
+        "-ni",
+        "--niter",
+        dest="niter",
+        default=50,
+        help="model iteration number to find the best hyperparameters",
+        type=int,
+    )
+    parser.add_argument(
+        "-wi",
+        "--w_invitro",
+        dest="w_invitro",
+        help="own:in vitro alone as input  , \
+            false:in vitro not as input ,\
+            true:use in vitro and in vivo as input",
+        default="False",
+    )
 
     parser.add_argument("-o", "--output", dest="outputFile", default="binary.txt")
     return parser.parse_args()
@@ -53,7 +94,6 @@ elif args.encoding == "multiclass":
 categorical, conc_column = get_col_ls(args.invitro_type)
 
 rand = random.randrange(1, 100)
-
 
 
 # -----------loading data & splitting into train and test dataset--------
@@ -89,11 +129,9 @@ traintest_idx, valid_idx = get_grouped_train_test_split(
 df_fishchem_tv = df_fishchem.iloc[traintest_idx, :]
 
 
-X_traintest = db_mortality.drop(columns="conc1_mean").iloc[traintest_idx, :]
-X_valid = db_mortality.drop(columns="conc1_mean").iloc[valid_idx, :]
-
-Y_traintest = db_mortality.iloc[traintest_idx, :].conc1_mean
-Y_valid = db_mortality.iloc[valid_idx, :].conc1_mean
+X_traintest, X_valid, Y_traintest, Y_valid = get_train_test_data(
+    db_mortality, traintest_idx, valid_idx, conc_column
+)
 
 if args.db_invitro != "no" and args.db_invitro != "overlap":
     # Encoding for invitro variable: binary and multiclass
@@ -120,24 +158,26 @@ if args.db_invitro != "no" and args.db_invitro != "overlap":
     matrices_invitro = cal_matrixs(
         X_traintest, db_invitro, categorical_both, non_categorical
     )
+    matrices_invitro_full = cal_matrixs(
+        X, db_invitro, categorical_both, non_categorical
+    )
 else:
     matrices_invitro = None
 print("distance matrix calculation finished", ctime())
 
 # ------------------------hyperparameters range---------
-if args.alpha_h == "logspace":
-    sequence_ah = np.logspace(-2, 0, 3)
+if args.hamming_alpha == "logspace":
+    sequence_ah = np.logspace(-2, 0, 30)
 else:
-    sequence_ah = [float(args.alpha_h)]
+    sequence_ah = [float(args.hamming_alpha)]
 
-if args.alpha_p == "logspace":
-    sequence_ap = np.logspace(-2, 0, 3)
+if args.pubchem2d_alpha == "logspace":
+    sequence_ap = np.logspace(-2, 0, 30)
 else:
-    sequence_ap = [float(args.alpha_p)]
+    sequence_ap = [float(args.pubchem2d_alpha)]
 
 
-
-hyper_params_tune,model = set_hyperparameters(args.model_type)
+hyper_params_tune, model = set_hyperparameters(args.model_type)
 
 params_comb = list(
     ParameterSampler(hyper_params_tune, n_iter=args.niter, random_state=2)
@@ -160,13 +200,11 @@ for ah in sequence_ah:
         result = RASAR_simple(
             df_fishchem_tv,
             col_groups,
-            matrices["euc"],
-            matrices["hamming"],
-            matrices["pubchem"],
+            matrices,
             ah,
             ap,
             X_traintest,
-            Y_traintest.values,
+            Y_traintest,
             db_invitro_matrices=matrices_invitro,
             invitro=args.w_invitro,
             n_neighbors=args.n_neighbors,
@@ -185,36 +223,34 @@ for ah in sequence_ah:
             valid_rf = pd.DataFrame()
         else:
             (matrix_traintest, matrix_valid) = get_traintest_matrices(
-                    matrices_full, [traintest_idx, valid_idx], ah, ap
-                    )
-            
+                matrices_full, [traintest_idx, valid_idx], ah, ap
+            )
+
             traintest_rf, valid_rf = cal_s_rasar(
-                matrix_traintest,
-                matrix_valid,
-                Y_traintest,
-                args.n_neighbors,
-                encoding,
+                matrix_traintest, matrix_valid, Y_traintest, args.n_neighbors, encoding,
             )
         if args.w_invitro != "False":
             if str(args.db_invitro) == "overlap":
-                traintest_rf = get_vitroinfo(traintest_rf, X, traintest_idx, args.invitro_label)
+                traintest_rf = get_vitroinfo(
+                    traintest_rf, X, traintest_idx, args.invitro_label
+                )
                 valid_rf = get_vitroinfo(valid_rf, X, valid_idx, args.invitro_label)
             else:
-                matrices_invitro_norm = normalized_invitro_matrix(
-                                                    X_traintest, matrices_invitro, ah, ap
-                                                )
 
+                matrices_invitro_full_norm = normalized_invitro_matrix(
+                    X_traintest, matrices_invitro_full, ah, ap
+                )
                 traintest_rf = find_nearest_vitro(
                     traintest_rf,
                     db_invitro,
-                    matrices_invitro_norm,
+                    matrices_invitro_full_norm,
                     traintest_idx,
                     args.invitro_label,
                 )
                 valid_rf = find_nearest_vitro(
                     valid_rf,
                     db_invitro,
-                    matrices_invitro_norm,
+                    matrices_invitro_full_norm,
                     valid_idx,
                     args.invitro_label,
                 )
@@ -231,6 +267,9 @@ for ah in sequence_ah:
         temp_grid = pd.concat([temp_grid, pd.DataFrame([ah], columns=["ah"])], axis=1)
         temp_grid = pd.concat([temp_grid, pd.DataFrame([ap], columns=["ap"])], axis=1)
         temp_grid = pd.concat(
+            [temp_grid, pd.DataFrame(["default"], columns=["hyperparameter"])], axis=1
+        )
+        temp_grid = pd.concat(
             [
                 temp_grid,
                 df_mean.add_prefix("train_avg_"),
@@ -240,14 +279,20 @@ for ah in sequence_ah:
             axis=1,
         )
         grid_search = pd.concat([grid_search, temp_grid])
-        if result[0].accuracy.values[0] > best_accs:
-            best_accs = result[0].accuracy.values[0]
+        if result.accuracy.mean() > best_accs:
+            best_accs = result.accuracy.mean()
             best_ah = ah
             best_ap = ap
-            print("success found better alphas and threshold", best_accs, end="\r")
+            best_score = temp_grid
+            print("success found better alphas", best_accs, end="\r")
 # df2file(grid_search, args.outputFile + "_alphas.txt")
 
 # --------------explore more on the model's hyperparameter range with found alphas--------
+print(
+    "best alphas and threshold found, ah:{}, ap:{}, accuracy:{}".format(
+        best_ah, best_ap, best_accs
+    )
+)
 for i in tqdm(range(0, len(params_comb))):
 
     for k, v in params_comb[i].items():
@@ -256,13 +301,11 @@ for i in tqdm(range(0, len(params_comb))):
     result = RASAR_simple(
         df_fishchem_tv,
         col_groups,
-        matrices["euc"],
-        matrices["hamming"],
-        matrices["pubchem"],
+        matrices,
         best_ah,
         best_ap,
         X_traintest,
-        Y_traintest.values,
+        Y_traintest,
         db_invitro_matrices=matrices_invitro,
         invitro=args.w_invitro,
         n_neighbors=args.n_neighbors,
@@ -280,32 +323,35 @@ for i in tqdm(range(0, len(params_comb))):
         valid_rf = pd.DataFrame()
     else:
         (matrix_traintest, matrix_valid) = get_traintest_matrices(
-        matrices_full, [traintest_idx, valid_idx], ah, ap
+            matrices_full, [traintest_idx, valid_idx], best_ah, best_ap
         )
         traintest_rf, valid_rf = cal_s_rasar(
-                                    matrix_traintest,
-                                    matrix_valid,
-                                    Y_traintest,
-                                    args.n_neighbors,
-                                    encoding,
-                                )
+            matrix_traintest, matrix_valid, Y_traintest, args.n_neighbors, encoding,
+        )
     if args.w_invitro != "False":
         if str(args.db_invitro) == "overlap":
-            traintest_rf = get_vitroinfo(traintest_rf, X, traintest_idx, args.invitro_label)
+            traintest_rf = get_vitroinfo(
+                traintest_rf, X, traintest_idx, args.invitro_label
+            )
             valid_rf = get_vitroinfo(valid_rf, X, valid_idx, args.invitro_label)
         else:
-            matrices_invitro_norm = normalized_invitro_matrix(
-                                                    X_traintest, matrices_invitro, ah, ap
-                                                )
+            matrices_invitro_full_norm = normalized_invitro_matrix(
+                X_traintest, matrices_invitro_full, best_ah, best_ap
+            )
+
             traintest_rf = find_nearest_vitro(
                 traintest_rf,
                 db_invitro,
-                matrices_invitro_norm,
+                matrices_invitro_full_norm,
                 traintest_idx,
                 args.invitro_label,
             )
             valid_rf = find_nearest_vitro(
-                valid_rf, db_invitro, matrices_invitro_norm, valid_idx, args.invitro_label,
+                valid_rf,
+                db_invitro,
+                matrices_invitro_full_norm,
+                valid_idx,
+                args.invitro_label,
             )
 
     df_valid_score = fit_and_predict(
@@ -316,32 +362,32 @@ for i in tqdm(range(0, len(params_comb))):
     df_mean = pd.DataFrame(df_output.mean(axis=0)).transpose()
     df_std = pd.DataFrame(df_output.sem(axis=0)).transpose()
 
-
     temp_grid = pd.DataFrame()
     temp_grid = pd.concat([temp_grid, pd.DataFrame([best_ah], columns=["ah"])], axis=1)
     temp_grid = pd.concat([temp_grid, pd.DataFrame([best_ap], columns=["ap"])], axis=1)
 
     for k, v in params_comb[i].items():
         temp_grid = pd.concat([temp_grid, pd.DataFrame([v], columns=[k])], axis=1)
-    
+
     temp_grid = pd.concat(
         [
             temp_grid,
             df_mean.add_prefix("train_avg_"),
             df_std.add_prefix("train_std_"),
-            df_valid_score.add_prefix("test_"),
+            df_valid_score.add_prefix("valid_"),
         ],
         axis=1,
     )
 
     grid_search = pd.concat([grid_search, temp_grid])
-    if result[0].accuracy.values[0] > best_accs:
-        best_accs = result[0].accuracy.values[0]
+
+    if result.accuracy.mean() > best_accs:
+        best_accs = result.accuracy.mean()
         best_score = temp_grid
         print("success found better hyperparameters", best_accs)
 # ----------------save the information into a file-------
 df2file(grid_search, args.outputFile + "_fullinfo.txt")
-df2file(best_score,args.outputFile + ".txt")
+df2file(best_score, args.outputFile + ".txt")
 
 
 # ----------------------------------------------------------------------------------general: invitro + (invivo) -> invivo (gtv/gtvv)--------------------------------------------

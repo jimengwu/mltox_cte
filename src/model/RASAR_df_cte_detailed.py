@@ -5,28 +5,72 @@ import argparse
 
 
 def getArguments():
-    parser = argparse.ArgumentParser(description="Running datafusion RASAR model for stratified splitted datasets, \
+    parser = argparse.ArgumentParser(
+        description="Running datafusion RASAR model for stratified splitted datasets, \
                                      with not only information from mortality, but also from other effects. and the \
                                      model was first trained to select the best alphas combination, then we selected the \
-                                     best hyperparameter combination.")
-    parser.add_argument("-i", "--input", dest="inputFile", required=True)
+                                     best hyperparameter combination."
+    )
+    parser.add_argument(
+        "-i", "--input", dest="inputFile", help="input file position", required=True
+    )
     parser.add_argument("-idf", "--input_df", dest="inputFile_df", required=True)
-    parser.add_argument("-iv", "--input_vitro", dest="inputFile_vitro", default="no")
-    parser.add_argument("-ah", "--alpha_h", dest="alpha_h", required=True, nargs="?")
-    parser.add_argument("-ap", "--alpha_p", dest="alpha_p", nargs="?")
-    parser.add_argument("-e", "--encoding", dest="encoding", default="binary")
+    parser.add_argument(
+        "-iv",
+        "--input_vitro",
+        dest="inputFile_vitro",
+        help="input invitro file position",
+        default="no",
+    )
+    parser.add_argument("-ah", "--alpha_h", dest="hamming_alpha", required=True)
+    parser.add_argument("-ap", "--alpha_p", dest="pubchem2d_alpha", required=True)
+    parser.add_argument(
+        "-e",
+        "--encoding",
+        dest="encoding",
+        help="binary or multiclass (5 class)",
+        default="binary",
+    )
     parser.add_argument("-effect", "--train_effect", dest="train_effect", default="MOR")
     parser.add_argument(
         "-endpoint", "--train_endpoint", dest="train_endpoint", required=True
     )
     parser.add_argument(
-        "-il", "--invitro_label", dest="invitro_label", default="number"
+        "-dbi",
+        "--db_invitro",
+        dest="db_invitro",
+        help="yes: add in vitro as other source for distance matrix, \
+            no: do not use in vitro as input, \
+            overlap: use in vitro as input feature",
+        default="no",
+    )
+    parser.add_argument(
+        "-il",
+        "--invitro_label",
+        dest="invitro_label",
+        help="number, label",
+        default="number",
     )
     parser.add_argument(
         "-n", "--n_neighbors", dest="n_neighbors", nargs="?", default=1, type=int
     )
-    parser.add_argument("-ni", "--niter", dest="niter", default=20, type=int)
-    parser.add_argument("-wi", "--w_invitro", dest="w_invitro", default="False")
+    parser.add_argument(
+        "-ni",
+        "--niter",
+        dest="niter",
+        default=50,
+        help="model iteration number to find the best hyperparameters",
+        type=int,
+    )
+    parser.add_argument(
+        "-wi",
+        "--w_invitro",
+        dest="w_invitro",
+        help="own:in vitro alone as input  , \
+            false:in vitro not as input ,\
+            true:use in vitro and in vivo as input",
+        default="False",
+    )
 
     parser.add_argument("-o", "--output", dest="outputFile", default="binary.txt")
     return parser.parse_args()
@@ -51,13 +95,24 @@ invitro_matrices = None
 
 # ----------loading dataset--------------
 print("loading dataset...", ctime())
-db_mortality, db_datafusion = load_datafusion_datasets(
-    args.inputFile,
-    args.inputFile_df,
-    categorical_columns=categorical,
-    encoding=encoding,
-    encoding_value=encoding_value,
-)
+if args.db_invitro == "no" or args.db_invitro == "overlap":
+    db_mortality, db_datafusion = load_datafusion_datasets(
+        args.inputFile,
+        args.inputFile_df,
+        categorical_columns=categorical,
+        encoding=encoding,
+        encoding_value=encoding_value,
+    )
+    db_invitro = args.db_invitro
+else:
+    db_mortality, db_datafusion, db_invitro = load_datafusion_datasets_invitro(
+        args.inputFile,
+        args.inputFile_df,
+        args.inputFile_vitro,
+        categorical_columns=categorical,
+        encoding=encoding,
+        encoding_value=encoding_value,
+    )
 print("finish loaded.", ctime())
 # ------------------ stratified split the dataset into train and test---------
 df_fishchem = db_mortality[["fish", "test_cas"]]
@@ -85,6 +140,13 @@ matrices_df = cal_matrixs(
     categorical,
     non_categorical,
 )
+if args.db_invitro != "no" and args.db_invitro != "overlap":
+    matrices_invitro = cal_matrixs(
+        X_traintest, db_invitro, categorical_both, non_categorical
+    )
+else:
+    matrices_invitro = None
+
 print("distance matrix successfully calculated!", ctime())
 
 del db_mortality
@@ -121,12 +183,15 @@ params_comb = list(
 )
 
 
-if args.alpha_h == "logspace":
-    sequence_ap = np.logspace(-2, 0, 2)
-    sequence_ah = sequence_ap
+if args.hamming_alpha == "logspace":
+    sequence_ah = np.logspace(-2, 0, 30)
 else:
-    sequence_ap = [float(args.alpha_p)]
-    sequence_ah = [float(args.alpha_h)]
+    sequence_ah = [float(args.hamming_alpha)]
+
+if args.pubchem2d_alpha == "logspace":
+    sequence_ap = np.logspace(-2, 0, 30)
+else:
+    sequence_ap = [float(args.pubchem2d_alpha)]
 
 
 # -------------------training using the default model setting and found the best alphas combination--------------------
@@ -153,13 +218,13 @@ for ah in sequence_ah:
         results = cv_datafusion_rasar(
             matrices,
             matrices_df,
-            db_invitro_matrix=invitro_matrices,
+            matrices_invitro=matrices_invitro,
             ah=ah,
             ap=ap,
             X=X_traintest,
             Y=Y_traintest,
             db_datafusion=db_datafusion,
-            db_invitro=args.inputFile_vitro,
+            db_invitro=db_invitro,
             train_endpoint=args.train_endpoint,
             train_effect=args.train_effect,
             df_fishchem_tv=df_fishchem_tv,
@@ -181,6 +246,11 @@ for ah in sequence_ah:
         count = count + 1
 
 # --------------explore more on the model's hyperparameter range with found alphas--------
+print(
+    "best alphas and threshold found, ah:{}, ap:{}, accuracy:{}".format(
+        best_ah, best_ap, best_accs
+    )
+)
 for i in range(0, len(params_comb)):
     remain_time = (datetime.datetime.now() - starttime) / count * (num_runs - count)
     print(
@@ -200,13 +270,13 @@ for i in range(0, len(params_comb)):
         results = cv_datafusion_rasar(
             matrices,
             matrices_df,
-            db_invitro_matrix="no",
+            matrices_invitro=matrices_invitro,
             ah=best_ah,
             ap=best_ap,
             X=X_traintest,
             Y=Y_traintest,
             db_datafusion=db_datafusion,
-            db_invitro=args.inputFile_vitro,
+            db_invitro=db_invitro,
             train_endpoint=args.train_endpoint,
             train_effect=args.train_effect,
             df_fishchem_tv=df_fishchem_tv,
@@ -262,6 +332,16 @@ db_datafusion_matrix = dist_matrix(
     best_ap,
 )
 
+if args.db_invitro != "no" and args.db_invitro != "overlap":
+
+    db_invitro[non_categorical] = minmax.transform(db_invitro.loc[:, non_categorical])
+
+    db_invitro_matrix_train = dist_matrix(
+        X_traintest, db_invitro, non_categorical, categorical_both, best_ah, best_ap
+    )
+    db_invitro_matrix_test = dist_matrix(
+        X_valid, db_invitro, non_categorical, categorical_both, best_ah, best_ap
+    )
 
 s_rasar_traintest, s_rasar_valid = cal_s_rasar(
     matrices_traintest, matrices_valid, Y_traintest, args.n_neighbors, encoding,
@@ -288,12 +368,25 @@ if args.w_invitro == "own":
     valid_rf = pd.DataFrame()
 
 if args.w_invitro != "False":
-    if str(args.inputFile_vitro) == "overlap":
+    if str(args.db_invitro) == "overlap":
         traintest_rf = get_vitroinfo(
-            traintest_rf, X_traintest, traintest_index, args.invitro_label
+            traintest_rf, X, traintest_index, args.invitro_label
         )
-        valid_rf = get_vitroinfo(valid_rf, X_valid, valid_index, args.invitro_label)
-
+        valid_rf = get_vitroinfo(valid_rf, X, valid_index, args.invitro_label)
+    else:
+        db_invitro_matrix = dist_matrix(
+            X, db_invitro, non_categorical, categorical_both, best_ah, best_ap
+        )
+        traintest_rf = find_nearest_vitro(
+            traintest_rf,
+            db_invitro,
+            db_invitro_matrix,
+            traintest_idx,
+            args.invitro_label,
+        )
+        valid_rf = find_nearest_vitro(
+            valid_rf, db_invitro, db_invitro_matrix, valid_idx, args.invitro_label,
+        )
 if encoding == "binary":
     df_test_score = fit_and_predict(
         model, traintest_rf, Y_traintest, valid_rf, Y_valid, encoding,
@@ -330,6 +423,7 @@ elif encoding == "multiclass":
 
 for k, v in best_param.items():
     df_test_score.loc[0, k] = str(v)
+
 df_test_score.loc[0, ["ah", "ap"]] = best_result.iloc[0][["ah", "ap"]]
 df_test_score.loc[0, "encoding"] = args.encoding
 
@@ -344,33 +438,3 @@ df_output = pd.concat(
 df2file(df_output, args.outputFile)
 # python RASAR_df_cte.py       -i  "C:/Users/wjmen/Desktop/GitHub/data/invivo/lc50_test.csv"  -idf  "C:/Users/wjmen/Desktop/GitHub/data/invivo/df_test.csv"      -endpoint ['LC50','EC50'] -effect 'MOR'  -ah 0.0695193 -ap 0.78476 -o test/df_rasar.txt -ni 5
 
-
-# python RASAR_df_cte.py       -i1  /local/wujimeng/code_jimeng/data/invivo/lc50_processed_jim.csv  -idf  /local/wujimeng/code_jimeng/data/invivo/datafusion_db_processed.csv      -endpoint ['LC50','EC50'] -effect 'MOR'  -ah 0.0695193 -ap 0.78476 -o effects/R1_rasar_alphas/binary/df_rasar.txt
-# python RASAR_df_cte.py       -i1  /local/wujimeng/code_jimeng/data/invivo/lc50_processed_jim.csv  -idf  /local/wujimeng/code_jimeng/data/invivo/datafusion_db_processed_ACC.csv  -endpoint ['LC50','EC50'] -effect 'MOR'  -ah 0.0695193 -ap 0.78476 -o effects/R1_rasar_alphas/binary/df_rasar_ACC.txt
-# python RASAR_df_cte.py       -i1  /local/wujimeng/code_jimeng/data/invivo/lc50_processed_jim.csv  -idf  /local/wujimeng/code_jimeng/data/invivo/datafusion_db_processed_BCM.csv  -endpoint ['LC50','EC50'] -effect 'MOR'  -ah 0.0695193 -ap 0.78476 -o effects/R1_rasar_alphas/binary/df_rasar_BCM.txt
-# python RASAR_df_cte.py       -i1  /local/wujimeng/code_jimeng/data/invivo/lc50_processed_jim.csv  -idf  /local/wujimeng/code_jimeng/data/invivo/datafusion_db_processed_BEH.csv  -endpoint ['LC50','EC50'] -effect 'MOR'  -ah 0.0695193 -ap 0.78476 -o effects/R1_rasar_alphas/binary/df_rasar_BEH.txt
-# python RASAR_df_cte.py       -i1  /local/wujimeng/code_jimeng/data/invivo/lc50_processed_jim.csv  -idf  /local/wujimeng/code_jimeng/data/invivo/datafusion_db_processed_CEL.csv  -endpoint ['LC50','EC50'] -effect 'MOR'  -ah 0.0695193 -ap 0.78476 -o effects/R1_rasar_alphas/binary/df_rasar_CEL.txt
-# python RASAR_df_cte.py       -i1  /local/wujimeng/code_jimeng/data/invivo/lc50_processed_jim.csv  -idf  /local/wujimeng/code_jimeng/data/invivo/datafusion_db_processed_ENZ.csv  -endpoint ['LC50','EC50'] -effect 'MOR'  -ah 0.0695193 -ap 0.78476 -o effects/R1_rasar_alphas/binary/df_rasar_ENZ.txt
-# python RASAR_df_cte.py       -i1  /local/wujimeng/code_jimeng/data/invivo/lc50_processed_jim.csv  -idf  /local/wujimeng/code_jimeng/data/invivo/datafusion_db_processed_GEN.csv  -endpoint ['LC50','EC50'] -effect 'MOR'  -ah 0.0695193 -ap 0.78476 -o effects/R1_rasar_alphas/binary/df_rasar_GEN.txt
-# python RASAR_df_cte.py       -i1  /local/wujimeng/code_jimeng/data/invivo/lc50_processed_jim.csv  -idf  /local/wujimeng/code_jimeng/data/invivo/datafusion_db_processed_ITX.csv  -endpoint ['LC50','EC50'] -effect 'MOR'  -ah 0.0695193 -ap 0.78476 -o effects/R1_rasar_alphas/binary/df_rasar_ITX.txt
-# python RASAR_df_cte.py       -i1  /local/wujimeng/code_jimeng/data/invivo/lc50_processed_jim.csv  -idf  /local/wujimeng/code_jimeng/data/invivo/datafusion_db_processed_PHY.csv  -endpoint ['LC50','EC50'] -effect 'MOR'  -ah 0.0695193 -ap 0.78476 -o effects/R1_rasar_alphas/binary/df_rasar_PHY.txt
-
-
-# ------------------------------------------------------invivo to invivo(gvvdf)----------------------------------------------------------
-# binary, datafusion, R=4
-# python RASAR_df_cte.py -i1 /local/wujimeng/code_jimeng/data/invivo/lc50_processed_jim.csv     -idf  /local/wujimeng/code_jimeng/data/invivo/datafusion_db_processed.csv -endpoint ['LC50','EC50'] -effect 'MOR'  -ah 0.23357214690901212 -ap 0.11288378916846889 -n 4 -o vitro_e/vivo+vitro/general/vivo_df_rasar_bi_4.csv
-# python RASAR_df_cte.py -i1 data/invivo/lc50_processed_jim.csv     -idf  /local/wujimeng/code_jimeng/data/invivo/datafusion_db_processed.csv -endpoint ['LC50','EC50'] -effect 'MOR'  -ah 0.041753189365604   -ap 4.893900918477494        -o rasar/df_rasar.txt
-
-
-# ------------------------------------------------------invivo to invivo(ovvdf)----------------------------------------------------------
-# python RASAR_df_cte.py -i1 /local/wujimeng/code_jimeng/data/invivo/invivo_repeated_w_invitro.csv -idf  /local/wujimeng/code_jimeng/data/invivo/datafusion_db_processed.csv -endpoint ['LC50','EC50'] -effect 'MOR'  -ah logspace -ap logspace -dbi "no"      -wi "False" -il "both" -o vitro_e/vivo/vivo_df_rasar_bi_repeated_4.csv
-
-# ------------------------------------------------------invitro + invivo to invivo(otvvdf)----------------------------------------------------------
-# python RASAR_df_cte.py -i1 /local/wujimeng/code_jimeng/data/invivo/invivo_repeated_w_invitro.csv -idf  /local/wujimeng/code_jimeng/data/invivo/datafusion_db_processed.csv -endpoint ['LC50','EC50'] -effect 'MOR'  -ah logspace -ap logspace -dbi "overlap" -wi "True"  -il "number" -o vitro_e/vivo+vitro/bestR/repeat_number_df.txt
-# python RASAR_df_cte.py -i1 /local/wujimeng/code_jimeng/data/invivo/invivo_repeated_w_invitro.csv -idf  /local/wujimeng/code_jimeng/data/invivo/datafusion_db_processed.csv -endpoint ['LC50','EC50'] -effect 'MOR'  -ah logspace -ap logspace -dbi "overlap" -wi "True"  -il "label"  -o vitro_e/vivo+vitro/bestR/repeat_label_df.txt
-# python RASAR_df_cte.py -i1 /local/wujimeng/code_jimeng/data/invivo/invivo_repeated_w_invitro.csv -idf  /local/wujimeng/code_jimeng/data/invivo/datafusion_db_processed.csv -endpoint ['LC50','EC50'] -effect 'MOR'  -ah logspace -ap logspace -dbi "overlap" -wi "True"  -il "both"   -o vitro_e/vivo+vitro/bestR/repeat_both_df.txt
-# python RASAR_df_cte.py -i1 /local/wujimeng/code_jimeng/data/invivo/invivo_repeated_w_invitro.csv -idf  /local/wujimeng/code_jimeng/data/invivo/datafusion_db_processed.csv -endpoint ['LC50','EC50'] -effect 'MOR'  -ah logspace -ap logspace -dbi "overlap" -wi "own"   -il "number" -o vitro_e/vivo+vitro/bestR/repeat_own_number_df.txt
-# python RASAR_df_cte.py -i1 /local/wujimeng/code_jimeng/data/invivo/invivo_repeated_w_invitro.csv -idf  /local/wujimeng/code_jimeng/data/invivo/datafusion_db_processed.csv -endpoint ['LC50','EC50'] -effect 'MOR'  -ah logspace -ap logspace -dbi "overlap" -wi "own"   -il "label"  -o vitro_e/vivo+vitro/bestR/repeat_own_label_df.txt
-# python RASAR_df_cte.py -i1 /local/wujimeng/code_jimeng/data/invivo/invivo_repeated_w_invitro.csv -idf  /local/wujimeng/code_jimeng/data/invivo/datafusion_db_processed.csv -endpoint ['LC50','EC50'] -effect 'MOR'  -ah logspace -ap logspace -dbi "overlap" -wi "own"   -il "both"   -o vitro_e/vivo+vitro/bestR/repeat_own_both_df.txt
-
-# -ah 0.01 -ap 0.15264179671752334
