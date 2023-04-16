@@ -1,2 +1,0 @@
-,threshold,train_dataset_accuracy,test_dataset_accuracy
-0,6.6923370570000005,0.7927 (153/193),0.2857 (18/63)
